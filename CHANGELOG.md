@@ -6,6 +6,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-08-24
+
+Design + theming release, plus per-tenant SMS numbers and per-tenant booking-page branding.
+
 ### Added
 
 - **Personalized dashboard themes.** Each user picks their own **accent** (15 colors — menu pills, buttons, links, glows, focus) and **background** (8 canvas tints) under Settings → Appearance, with a live swatch picker that recolors the whole dashboard instantly and saves per user. Preferences are **scoped per view** (`bh_user_prefs`, keyed by owner|admin + email), so the agency admin and each business owner can each theme their own dashboard independently. Implemented with a runtime CSS-variable brand scale (`data-accent` / `data-bg` on the shell) and `color-mix` glows, so one attribute swap re-themes every accent-derived surface at once.
@@ -16,6 +20,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Per-tenant booking-page color** — each business's public booking page (`/b/<slug>` and the embed) now renders in the business's own brand color. Owners pick it in Settings → Appearance ("what customers see") from 15 presets or a custom hex; the `add-booking-tool` provisioning flow can set it per client. Drives every button, selected day, and time slot in the booking flow via `branding.color`.
 - **Per-business SMS numbers** — a business can now send texts from its *own* purchased Twilio number instead of the shared deployment-wide one. Store the business's Twilio credentials in the new `bh_tenant_sms` table (app-key RLS, same as every other secret-bearing table) and its bookings send from that number, with its own A2P registration, reputation, and STOP opt-out list — fully isolated from other businesses on the hub. Businesses with no row fall back to the deployment-wide `TWILIO_*` number. No code changes to switch a client over — just data. (`docs/SMS.md`)
 
 ### Changed
