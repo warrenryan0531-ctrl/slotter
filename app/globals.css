@@ -1,0 +1,184 @@
+@import "tailwindcss";
+
+/*
+ * Slotter design system — "premium light".
+ * Emerald brand accent, mint-tinted surfaces, soft depth, Geist typeface.
+ * The whole UI is intentionally light-locked (see body note below): we do NOT
+ * follow prefers-color-scheme, because flipping only the text color to near-white
+ * while surfaces stay light makes inherited-color text render invisible.
+ */
+
+/* Font is inlined so it can reference the runtime --font-geist-sans variable. */
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/*
+ * Brand color scale — NON-inline on purpose: utilities compile to var(--color-brand-*),
+ * so a user's chosen accent (a [data-accent="…"] block below, set on the dashboard shell)
+ * overrides the whole scale at runtime. Defaults below are the 904 teal ("Jaguars teal").
+ */
+@theme {
+  --color-brand-50: #edf8f8;
+  --color-brand-100: #cbeceb;
+  --color-brand-200: #9fdcdb;
+  --color-brand-300: #63c4c4;
+  --color-brand-400: #2ba7a9;
+  --color-brand-500: #128a92;
+  --color-brand-600: #006778;
+  --color-brand-700: #005562;
+  --color-brand-800: #00434d;
+  --color-brand-900: #0f3d3e;
+
+  --color-ink: #0b1f22;
+  --color-mint: #f2f7f7;
+}
+
+:root {
+  --background: #f1f7f7;   /* app canvas — soft teal-mint */
+  --foreground: #15242a;   /* body ink */
+  --card: #ffffff;
+  --muted: #61727a;
+  --border: #e1ecec;
+  --border-strong: #cfdedd;
+
+  --shadow-xs: 0 1px 2px rgba(10, 28, 34, 0.05);
+  --shadow-card: 0 1px 2px rgba(10, 28, 34, 0.04), 0 3px 8px rgba(10, 28, 34, 0.05);
+  --shadow-md: 0 6px 20px -6px rgba(10, 28, 34, 0.14);
+  /* Themed glow — color-mix keeps it in sync with whatever accent is active. */
+  --shadow-brand: 0 8px 20px -6px color-mix(in srgb, var(--color-brand-600) 42%, transparent);
+  --radius: 14px;
+}
+
+/*
+ * Light-locked: dark #16241d text on light surfaces regardless of OS theme.
+ */
+html { color-scheme: light; }
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: var(--color-brand-200); color: var(--color-brand-900); }
+
+h1, h2, h3 { letter-spacing: -0.014em; color: var(--color-ink); }
+
+/* Refined focus ring for keyboard users across interactive elements. */
+:where(a, button, input, select, textarea, [role="switch"]):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--color-brand-500);
+  border-radius: 10px;
+}
+
+/* Prettier scrollbars (webkit). */
+* { scrollbar-width: thin; scrollbar-color: #cfdbd5 transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: #cfdbd5; border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: #b7c7bf; background-clip: content-box; }
+
+@layer components {
+  /* ---- Surfaces ---- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+  }
+  .card-pad { padding: 1.25rem; }
+  .card-hover { transition: box-shadow .18s ease, transform .18s ease, border-color .18s ease; }
+  .card-hover:hover { box-shadow: var(--shadow-md); border-color: #d7e4dd; }
+
+  /* ---- Buttons ---- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+    border-radius: 11px; font-weight: 600; font-size: .875rem; line-height: 1;
+    padding: .625rem 1rem; cursor: pointer;
+    transition: background-color .15s ease, box-shadow .15s ease, border-color .15s ease, transform .05s ease, opacity .15s ease;
+    white-space: nowrap;
+  }
+  .btn:active { transform: translateY(0.5px); }
+  .btn:disabled { opacity: .55; cursor: default; }
+
+  .btn-primary { background: var(--color-brand-600); color: #fff; box-shadow: var(--shadow-brand); }
+  .btn-primary:hover:not(:disabled) { background: var(--color-brand-700); }
+
+  .btn-secondary { background: #fff; color: var(--color-ink); border: 1px solid var(--border-strong); box-shadow: var(--shadow-xs); }
+  .btn-secondary:hover:not(:disabled) { background: #f7faf9; border-color: #c4d2cb; }
+
+  .btn-ghost { background: transparent; color: var(--muted); }
+  .btn-ghost:hover:not(:disabled) { background: rgba(0,103,120,.08); color: var(--color-brand-700); }
+
+  .btn-danger { background: #fff; color: #b42318; border: 1px solid #f3c6c1; }
+  .btn-danger:hover:not(:disabled) { background: #fef2f1; }
+
+  .btn-sm { padding: .4rem .7rem; font-size: .8125rem; border-radius: 9px; }
+
+  /* ---- Form controls ---- */
+  .input, .field {
+    background: #fff; color: var(--foreground);
+    border: 1px solid var(--border-strong); border-radius: 10px;
+    padding: .6rem .75rem; font-size: .9rem;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .input { width: 100%; display: block; }
+  .field { display: inline-block; }   /* inline controls in flex rows keep their natural width */
+  .input::placeholder, .field::placeholder { color: #9aa8a1; }
+  .input:focus, .field:focus {
+    outline: none; border-color: var(--color-brand-500);
+    box-shadow: 0 0 0 3px rgba(0,103,120,.16);
+  }
+  .label { display: block; font-size: .8125rem; font-weight: 600; color: #3c4a44; margin-bottom: .3rem; }
+
+  /* ---- Badges & pills ---- */
+  .badge {
+    display: inline-flex; align-items: center; gap: .3rem;
+    border-radius: 999px; font-size: .7rem; font-weight: 700; line-height: 1;
+    padding: .28rem .55rem;
+  }
+  .badge-brand { background: var(--color-brand-100); color: var(--color-brand-800); }
+  .badge-amber { background: #fef3c7; color: #92400e; }
+  .badge-gray { background: #eef2f0; color: #4b5a53; }
+
+  /* ---- Section heading ---- */
+  .eyebrow { font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--color-brand-700); }
+}
+
+/* ============================================================================
+ * Runtime theming — set data-accent / data-bg on the dashboard shell.
+ * Accent overrides the brand scale (menu pills, buttons, links, focus).
+ * Background overrides the app canvas.
+ * ==========================================================================*/
+
+/* Theme-aware glows (track the active accent via color-mix). */
+.glow-pill { box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--color-brand-600) 55%, transparent); }
+.glow-mark { box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--color-brand-600) 60%, transparent); }
+
+/* ---- Accents (15) ---- */
+[data-accent="teal"]    { --color-brand-50:#edf8f8; --color-brand-100:#cbeceb; --color-brand-200:#9fdcdb; --color-brand-300:#63c4c4; --color-brand-400:#2ba7a9; --color-brand-500:#128a92; --color-brand-600:#006778; --color-brand-700:#005562; --color-brand-800:#00434d; --color-brand-900:#0f3d3e; }
+[data-accent="emerald"] { --color-brand-50:#ecfdf5; --color-brand-100:#d1fae5; --color-brand-200:#a7f3d0; --color-brand-300:#6ee7b7; --color-brand-400:#34d399; --color-brand-500:#10b981; --color-brand-600:#059669; --color-brand-700:#047857; --color-brand-800:#065f46; --color-brand-900:#064e3b; }
+[data-accent="green"]   { --color-brand-50:#f0fdf4; --color-brand-100:#dcfce7; --color-brand-200:#bbf7d0; --color-brand-300:#86efac; --color-brand-400:#4ade80; --color-brand-500:#22c55e; --color-brand-600:#16a34a; --color-brand-700:#15803d; --color-brand-800:#166534; --color-brand-900:#14532d; }
+[data-accent="cyan"]    { --color-brand-50:#ecfeff; --color-brand-100:#cffafe; --color-brand-200:#a5f3fc; --color-brand-300:#67e8f9; --color-brand-400:#22d3ee; --color-brand-500:#06b6d4; --color-brand-600:#0891b2; --color-brand-700:#0e7490; --color-brand-800:#155e75; --color-brand-900:#164e63; }
+[data-accent="sky"]     { --color-brand-50:#f0f9ff; --color-brand-100:#e0f2fe; --color-brand-200:#bae6fd; --color-brand-300:#7dd3fc; --color-brand-400:#38bdf8; --color-brand-500:#0ea5e9; --color-brand-600:#0284c7; --color-brand-700:#0369a1; --color-brand-800:#075985; --color-brand-900:#0c4a6e; }
+[data-accent="blue"]    { --color-brand-50:#eff6ff; --color-brand-100:#dbeafe; --color-brand-200:#bfdbfe; --color-brand-300:#93c5fd; --color-brand-400:#60a5fa; --color-brand-500:#3b82f6; --color-brand-600:#2563eb; --color-brand-700:#1d4ed8; --color-brand-800:#1e40af; --color-brand-900:#1e3a8a; }
+[data-accent="indigo"]  { --color-brand-50:#eef2ff; --color-brand-100:#e0e7ff; --color-brand-200:#c7d2fe; --color-brand-300:#a5b4fc; --color-brand-400:#818cf8; --color-brand-500:#6366f1; --color-brand-600:#4f46e5; --color-brand-700:#4338ca; --color-brand-800:#3730a3; --color-brand-900:#312e81; }
+[data-accent="violet"]  { --color-brand-50:#f5f3ff; --color-brand-100:#ede9fe; --color-brand-200:#ddd6fe; --color-brand-300:#c4b5fd; --color-brand-400:#a78bfa; --color-brand-500:#8b5cf6; --color-brand-600:#7c3aed; --color-brand-700:#6d28d9; --color-brand-800:#5b21b6; --color-brand-900:#4c1d95; }
+[data-accent="purple"]  { --color-brand-50:#faf5ff; --color-brand-100:#f3e8ff; --color-brand-200:#e9d5ff; --color-brand-300:#d8b4fe; --color-brand-400:#c084fc; --color-brand-500:#a855f7; --color-brand-600:#9333ea; --color-brand-700:#7e22ce; --color-brand-800:#6b21a8; --color-brand-900:#581c87; }
+[data-accent="fuchsia"] { --color-brand-50:#fdf4ff; --color-brand-100:#fae8ff; --color-brand-200:#f5d0fe; --color-brand-300:#f0abfc; --color-brand-400:#e879f9; --color-brand-500:#d946ef; --color-brand-600:#c026d3; --color-brand-700:#a21caf; --color-brand-800:#86198f; --color-brand-900:#701a75; }
+[data-accent="pink"]    { --color-brand-50:#fdf2f8; --color-brand-100:#fce7f3; --color-brand-200:#fbcfe8; --color-brand-300:#f9a8d4; --color-brand-400:#f472b6; --color-brand-500:#ec4899; --color-brand-600:#db2777; --color-brand-700:#be185d; --color-brand-800:#9d174d; --color-brand-900:#831843; }
+[data-accent="rose"]    { --color-brand-50:#fff1f2; --color-brand-100:#ffe4e6; --color-brand-200:#fecdd3; --color-brand-300:#fda4af; --color-brand-400:#fb7185; --color-brand-500:#f43f5e; --color-brand-600:#e11d48; --color-brand-700:#be123c; --color-brand-800:#9f1239; --color-brand-900:#881337; }
+[data-accent="orange"]  { --color-brand-50:#fff7ed; --color-brand-100:#ffedd5; --color-brand-200:#fed7aa; --color-brand-300:#fdba74; --color-brand-400:#fb923c; --color-brand-500:#f97316; --color-brand-600:#ea580c; --color-brand-700:#c2410c; --color-brand-800:#9a3412; --color-brand-900:#7c2d12; }
+[data-accent="amber"]   { --color-brand-50:#fffbeb; --color-brand-100:#fef3c7; --color-brand-200:#fde68a; --color-brand-300:#fcd34d; --color-brand-400:#fbbf24; --color-brand-500:#f59e0b; --color-brand-600:#d97706; --color-brand-700:#b45309; --color-brand-800:#92400e; --color-brand-900:#78350f; }
+[data-accent="slate"]   { --color-brand-50:#f8fafc; --color-brand-100:#f1f5f9; --color-brand-200:#e2e8f0; --color-brand-300:#cbd5e1; --color-brand-400:#94a3b8; --color-brand-500:#64748b; --color-brand-600:#475569; --color-brand-700:#334155; --color-brand-800:#1e293b; --color-brand-900:#0f172a; }
+
+/* ---- Backgrounds (8) — override the app canvas ---- */
+[data-bg="mint"]     { --background:#f1f7f7; }
+[data-bg="white"]    { --background:#ffffff; }
+[data-bg="warm"]     { --background:#f8f5f0; }
+[data-bg="slate"]    { --background:#f2f5f8; }
+[data-bg="sand"]     { --background:#f5f2ec; }
+[data-bg="sky"]      { --background:#eef4fb; }
+[data-bg="lavender"] { --background:#f3f1fb; }
+[data-bg="rose"]     { --background:#fbf2f5; }
