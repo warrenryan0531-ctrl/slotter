@@ -133,6 +133,7 @@ create table bh_bookings (
   stripe_payment_method_id text,
   fee_charged_cents integer,
   fee_quote_cents integer, -- fee amount disclosed to the customer at booking time (charge this, not a recomputed value)
+  fee_charge_pending boolean not null default false, -- durable "charge attempted, outcome unconfirmed" marker (migration 014)
   created_at timestamptz not null default now(),
   check (ends_at > starts_at),
   -- Impossible to double-book at the DB level: no two CONFIRMED/PENDING exclusive bookings for one
@@ -442,6 +443,16 @@ $$;
 -- ============================================================
 -- v2 · E1 — two-way calendar sync (added 2026-08). See db/migrations/002_calendar_sync.sql.
 -- ============================================================
+-- B5 — orphaned intake-upload tracking for the cron sweep (see db/migrations/014_hardening.sql).
+create table if not exists bh_intake_uploads (
+  path text primary key,
+  tenant_slug text not null,
+  created_at timestamptz not null default now()
+);
+alter table bh_intake_uploads enable row level security;
+create policy bh_app_key_all on bh_intake_uploads
+  for all using (bh_check_key()) with check (bh_check_key());
+
 -- B1 Layer B — Zoom video-meeting connections (see db/migrations/013_zoom_meetings.sql).
 create table if not exists bh_meeting_connections (
   id uuid primary key default gen_random_uuid(),

@@ -5,7 +5,7 @@ import type { Tenant, Service, Booking } from "../../lib/types";
 // checkout carries metadata + expiry, and refund resolves the PaymentIntent and passes an
 // idempotency key + server-computed amount (R2). No live Stripe account needed.
 
-const created = { checkout: vi.fn(), refund: vi.fn(), retrieve: vi.fn() };
+const created = { checkout: vi.fn(), refund: vi.fn(), retrieve: vi.fn(), piCreate: vi.fn(), piSearch: vi.fn() };
 
 vi.mock("stripe", () => {
   return { default: class {
@@ -14,6 +14,10 @@ vi.mock("stripe", () => {
       retrieve: (...a: unknown[]) => created.retrieve(...a),
     } };
     refunds = { create: (...a: unknown[]) => created.refund(...a) };
+    paymentIntents = {
+      create: (...a: unknown[]) => created.piCreate(...a),
+      search: (...a: unknown[]) => created.piSearch(...a),
+    };
   } };
 });
 
@@ -32,7 +36,9 @@ const tenant = { id: "t1", slug: "acme", name: "Acme" } as Tenant;
 const service = { id: "s1", name: "Detail", tenant_id: "t1" } as Service;
 const booking = { id: "bk1", manage_token: "mt", checkout_ref: "cs_123", customer: { email: "c@x.com" } } as Booking;
 
-beforeEach(() => { created.checkout.mockReset(); created.refund.mockReset(); created.retrieve.mockReset(); updateMock.mockReset(); });
+const feeBooking = { ...booking, stripe_customer_id: "cus_1", stripe_payment_method_id: "pm_1" } as Booking;
+
+beforeEach(() => { created.checkout.mockReset(); created.refund.mockReset(); created.retrieve.mockReset(); created.piCreate.mockReset(); created.piSearch.mockReset(); updateMock.mockReset(); });
 afterEach(() => vi.restoreAllMocks());
 
 describe("StripePayments", () => {
@@ -59,5 +65,44 @@ describe("StripePayments", () => {
     expect(params.payment_intent).toBe("pi_123");
     expect(params.amount).toBe(5000);
     expect(opts.idempotencyKey).toBe("bk1:refund");
+  });
+
+  // ---- B3 chargeFee: off-session charge + duplicate-capture guards ----
+  it("chargeFee creates an off-session PaymentIntent when no prior charge exists", async () => {
+    created.piSearch.mockResolvedValueOnce({ data: [] });
+    created.piCreate.mockResolvedValueOnce({ id: "pi_new", status: "succeeded" });
+    const { paymentPort } = await import("../../lib/services/payments");
+    const res = await paymentPort("prod").chargeFee({ tenant, booking: feeBooking, amountCents: 2500, description: "fee", idempotencyKey: "noshowfee_bk1" });
+    expect(res).toEqual({ chargedCents: 2500, paymentRef: "pi_new" });
+    const [params, opts] = created.piCreate.mock.calls[0];
+    expect(params.off_session).toBe(true);
+    expect(params.confirm).toBe(true);
+    expect(params.amount).toBe(2500);
+    expect(params.metadata.kind).toBe("no_show_fee");
+    expect(opts.idempotencyKey).toBe("noshowfee_bk1");
+  });
+
+  it("chargeFee ADOPTS a prior succeeded PaymentIntent instead of charging again", async () => {
+    created.piSearch.mockResolvedValueOnce({ data: [{ id: "pi_prior", amount: 2500 }] });
+    const { paymentPort } = await import("../../lib/services/payments");
+    const res = await paymentPort("prod").chargeFee({ tenant, booking: feeBooking, amountCents: 2500, description: "fee", idempotencyKey: "noshowfee_bk1" });
+    expect(res).toEqual({ chargedCents: 2500, paymentRef: "pi_prior" });
+    expect(created.piCreate).not.toHaveBeenCalled(); // no second charge
+  });
+
+  it("chargeFee REFUSES when a prior attempt exists but search is unavailable (never double-charges)", async () => {
+    created.piSearch.mockRejectedValueOnce(new Error("search down"));
+    const { paymentPort } = await import("../../lib/services/payments");
+    await expect(paymentPort("prod").chargeFee({ tenant, booking: feeBooking, amountCents: 2500, description: "fee", idempotencyKey: "noshowfee_bk1", mustReconcile: true }))
+      .rejects.toThrow(/reconcile unavailable/);
+    expect(created.piCreate).not.toHaveBeenCalled(); // refused, no charge
+  });
+
+  it("chargeFee still charges a FIRST attempt even if search is unavailable (idempotency key covers it)", async () => {
+    created.piSearch.mockRejectedValueOnce(new Error("search down"));
+    created.piCreate.mockResolvedValueOnce({ id: "pi_first", status: "succeeded" });
+    const { paymentPort } = await import("../../lib/services/payments");
+    const res = await paymentPort("prod").chargeFee({ tenant, booking: feeBooking, amountCents: 2500, description: "fee", idempotencyKey: "noshowfee_bk1", mustReconcile: false });
+    expect(res.paymentRef).toBe("pi_first");
   });
 });

@@ -8,9 +8,10 @@ const state = vi.hoisted(() => ({
   tenant: null as unknown,
   chargeResult: { chargedCents: 0, paymentRef: "pi_x" } as { chargedCents: number; paymentRef: string },
   chargeThrows: false,
-  chargeCalls: [] as unknown[],
-  updates: [] as unknown[],
+  chargeCalls: [] as Record<string, unknown>[],
+  updates: [] as Record<string, unknown>[],
   events: [] as unknown[],
+  claimRows: [{ id: "b1" }] as unknown[], // non-empty = the pending-claim update matched a row
 }));
 vi.mock("../../lib/repo", () => ({
   bookingById: async () => state.booking,
@@ -20,9 +21,9 @@ vi.mock("../../lib/repo", () => ({
 vi.mock("../../lib/services", () => ({
   getServices: () => ({
     pay: {
-      chargeFee: async (a: unknown) => {
-        if (state.chargeThrows) throw new Error("card_declined");
+      chargeFee: async (a: Record<string, unknown>) => {
         state.chargeCalls.push(a);
+        if (state.chargeThrows) throw new Error("card_declined");
         return state.chargeResult;
       },
     },
@@ -30,12 +31,28 @@ vi.mock("../../lib/services", () => ({
 }));
 vi.mock("../../lib/observe", () => ({ captureError: () => {} }));
 vi.mock("../../lib/db", () => {
+  // A chainable, awaitable stub. update() records the row; a chain ending in .is() (the final mark)
+  // is awaited directly; a chain ending in .select() (the pending-claim) resolves to claimRows.
+  const makeChain = (table: string, row?: unknown) => {
+    const result = { data: state.claimRows, error: null };
+    const chain: Record<string, unknown> = {
+      update: (r: unknown) => { state.updates.push({ table, row: r }); return makeChain(table, r); },
+      eq: () => chain,
+      is: () => chain,
+      select: () => Promise.resolve(result),
+      then: (res: (v: unknown) => unknown) => res(result), // awaitable
+    };
+    void row;
+    return chain;
+  };
   const from = (table: string) => ({
-    update: (row: unknown) => ({ eq: () => ({ is: () => { state.updates.push({ table, row }); return Promise.resolve({ error: null }); } }) }),
-    insert: (row: unknown) => { state.events.push({ table, row }); return Promise.resolve({ error: null }); },
+    ...makeChain(table),
+    insert: (r: unknown) => { state.events.push({ table, row: r }); return Promise.resolve({ error: null }); },
   });
   return { db: () => ({ from }) };
 });
+
+const chargedUpdate = () => state.updates.find((u) => Object.prototype.hasOwnProperty.call(u.row, "fee_charged_cents"));
 
 import { chargeNoShowFee, computeFeeCents } from "../../lib/booking";
 
@@ -61,6 +78,7 @@ describe("chargeNoShowFee guards", () => {
     state.booking = booking(); state.service = service(); state.tenant = tenant;
     state.chargeThrows = false; state.chargeCalls = []; state.updates = []; state.events = [];
     state.chargeResult = { chargedCents: 2500, paymentRef: "pi_ok" };
+    state.claimRows = [{ id: "b1" }];
   });
 
   it("charges the exact fee once and records it (happy path)", async () => {
@@ -69,7 +87,8 @@ describe("chargeNoShowFee guards", () => {
     expect(state.chargeCalls).toHaveLength(1);
     expect((state.chargeCalls[0] as { amountCents: number; idempotencyKey: string }).amountCents).toBe(2500);
     expect((state.chargeCalls[0] as { idempotencyKey: string }).idempotencyKey).toBe("noshowfee_b1");
-    expect(state.updates).toHaveLength(1); // marked charged
+    expect((state.chargeCalls[0] as { mustReconcile?: boolean }).mustReconcile).toBe(false); // first attempt
+    expect(chargedUpdate()).toBeTruthy(); // fee_charged_cents was written
     expect(state.events).toHaveLength(1); // audit event
   });
 
@@ -121,6 +140,21 @@ describe("chargeNoShowFee guards", () => {
   it("does NOT mark charged when the charge fails (safe retry)", async () => {
     state.chargeThrows = true;
     expect(await chargeNoShowFee("b1")).toEqual({ ok: false, reason: "charge_failed" });
-    expect(state.updates).toHaveLength(0); // fee_charged_cents stays null → retry allowed
+    expect(chargedUpdate()).toBeUndefined(); // fee_charged_cents stays null → retry allowed
+  });
+
+  // ---- durable pre-charge marker (>24h double-charge edge) ----
+  it("refuses concurrently when the pending-claim update matches no row (in_progress)", async () => {
+    state.claimRows = []; // another attempt already flipped fee_charge_pending
+    expect(await chargeNoShowFee("b1")).toEqual({ ok: false, reason: "in_progress" });
+    expect(state.chargeCalls).toHaveLength(0); // never reached Stripe
+  });
+
+  it("a retry with a prior attempt on record passes mustReconcile=true to the charge", async () => {
+    state.booking = booking({ fee_charge_pending: true }); // a prior attempt exists
+    await chargeNoShowFee("b1");
+    expect((state.chargeCalls[0] as { mustReconcile?: boolean }).mustReconcile).toBe(true);
+    // did NOT re-claim (already pending) — the only update is the final mark
+    expect(state.updates.every((u) => Object.prototype.hasOwnProperty.call(u.row, "fee_charged_cents"))).toBe(true);
   });
 });

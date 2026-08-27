@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import * as repo from "@/lib/repo";
+import { db } from "@/lib/db";
 import { rateLimit, ipOf } from "@/lib/ratelimit";
 import { createIntakeUpload, INTAKE_MAX_BYTES, INTAKE_MIME } from "@/lib/storage";
 
@@ -27,8 +28,17 @@ export async function POST(req: Request) {
   const tenant = await repo.tenantBySlug(slug);
   if (!tenant) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
+  // Per-tenant budget: bounds abuse targeting ONE tenant across many IPs (the per-IP limit alone
+  // doesn't). 90 signed URLs / 10 min is far above any real booking-form use.
+  if (!(await rateLimit(`upload:slug:${slug}`, 600, 90))) {
+    return NextResponse.json({ error: "rate_limited" }, { status: 429 });
+  }
+
   try {
     const up = await createIntakeUpload(slug, filename);
+    // Track the minted upload so the orphan sweep can GC it if no booking ever references it.
+    try { await db().from("bh_intake_uploads").insert({ path: up.path, tenant_slug: slug }); }
+    catch (e) { console.error("[b5] upload tracking insert failed:", (e as Error).message); }
     return NextResponse.json({ path: up.path, signedUrl: up.signedUrl, token: up.token, name: up.name });
   } catch (e) {
     console.error("[b5] upload-url failed:", (e as Error).message);

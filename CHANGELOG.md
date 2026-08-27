@@ -6,6 +6,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-08-27
+
+Hardening pass on the Phase 1 features (from the adversarial reviews' follow-up backlog).
+
+### Security / Reliability
+
+- **B3 — durable pre-charge marker closes the >24h double-charge edge.** A no-show fee charge now
+  sets `bh_bookings.fee_charge_pending` *before* calling Stripe and clears it only on confirmed
+  success. Any retry with the flag still set must reconcile with Stripe (search for a prior
+  succeeded PaymentIntent) before it may create a new one, and refuses if it cannot — so a charge
+  can never be duplicated even when the Stripe idempotency key has expired *and* search is
+  momentarily unavailable. The atomic claim also serves as a concurrency lock against simultaneous
+  clicks. A genuine failure remains safely retryable. (migration 014)
+- **B5 — orphaned intake-file cleanup sweep.** Every minted upload URL is tracked in
+  `bh_intake_uploads`; the reminders cron GC's tracked uploads older than 24h that no booking
+  references, deleting the storage object. Files that got attached to a booking are kept. Closes the
+  abandoned-upload storage leak. (migration 014; adds an `intake` bucket delete policy for the
+  server role.)
+- **B5 — per-tenant upload rate limit.** `/api/intake/upload-url` now also budgets per tenant slug
+  (on top of per-IP), bounding abuse aimed at a single tenant from many IPs.
+
 ## [2.3.0] — 2026-08-27
 
 The competitive-gap release ("Phase 1", B1–B5): five features closing the highest-impact gaps

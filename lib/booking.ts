@@ -285,10 +285,12 @@ export function computeFeeCents(service: Service): number {
 
 /**
  * B3: owner-initiated no-show / late-cancel fee charge. Never called automatically.
- * Guards: service protected, booking is a no-show or a cancellation, a card is vaulted, and the fee
- * hasn't already been charged. Charging is idempotent three ways: the permanent fee_charged_cents
- * marker (checked before, set after under a null-guard) plus a stable Stripe idempotency key — so a
- * transient failure can be safely retried without ever double-charging.
+ * Guards: service protected, booking is an owner-marked no-show, a card is vaulted, and the fee
+ * hasn't already been charged. Double-charge is impossible via four layers: the permanent
+ * fee_charged_cents marker (checked before, set after under a null-guard), the atomic
+ * fee_charge_pending claim (concurrency lock), a stable Stripe idempotency key (immediate-retry
+ * window), and — for any retry after a prior attempt — a reconcile-or-refuse step that never blindly
+ * re-charges even if the idempotency key has expired. A genuine failure is still safely retryable.
  */
 export async function chargeNoShowFee(bookingId: string): Promise<{ ok: boolean; reason?: string; chargedCents?: number }> {
   const booking = await repo.bookingById(bookingId);
@@ -307,6 +309,18 @@ export async function chargeNoShowFee(bookingId: string): Promise<{ ok: boolean;
   const amount = booking.fee_quote_cents ?? computeFeeCents(service);
   if (amount <= 0) return { ok: false, reason: "no_fee" };
 
+  // Durable pre-charge marker. If a prior attempt is already on record (pending), this retry must
+  // reconcile with Stripe before charging again. Otherwise, atomically claim the attempt now — the
+  // WHERE guard doubles as a concurrency lock so two simultaneous clicks can't both proceed.
+  const wasPending = booking.fee_charge_pending === true;
+  if (!wasPending) {
+    const claim = await db().from("bh_bookings")
+      .update({ fee_charge_pending: true })
+      .eq("id", booking.id).eq("fee_charge_pending", false).is("fee_charged_cents", null)
+      .select("id");
+    if (claim.error || !claim.data || claim.data.length === 0) return { ok: false, reason: "in_progress" };
+  }
+
   const { pay } = getServices();
   let res;
   try {
@@ -314,13 +328,20 @@ export async function chargeNoShowFee(bookingId: string): Promise<{ ok: boolean;
       tenant, booking, amountCents: amount,
       description: `No-show fee — ${service.name} (${tenant.name})`,
       idempotencyKey: `noshowfee_${booking.id}`,
+      mustReconcile: wasPending, // a prior attempt exists → confirm-or-refuse, never a blind re-charge
     });
   } catch (e) {
+    // Leave fee_charge_pending set: the next retry will reconcile before it can charge again, so a
+    // lost-response success can never be double-charged. A genuine decline reconciles to "no charge"
+    // and re-attempts cleanly.
     captureError("b3.chargeFee", e);
     return { ok: false, reason: "charge_failed" };
   }
-  // Permanent one-charge marker; the null-guard makes a concurrent second write a no-op.
-  await db().from("bh_bookings").update({ fee_charged_cents: res.chargedCents }).eq("id", booking.id).is("fee_charged_cents", null);
+  // Permanent one-charge marker + clear the pending flag; the null-guard makes a concurrent second write a no-op.
+  const mark = await db().from("bh_bookings").update({ fee_charged_cents: res.chargedCents, fee_charge_pending: false }).eq("id", booking.id).is("fee_charged_cents", null);
+  // The money already moved. If recording it failed, alert loudly — a later retry self-heals via the
+  // reconcile search (it will re-find this same succeeded PI, never re-charge), but this should be seen.
+  if (mark.error) captureError("b3.markCharged", new Error(`fee charged (${res.paymentRef}) but marking booking ${booking.id} failed: ${mark.error.message}`));
   // Best-effort audit trail (never blocks the charge result).
   try {
     await db().from("bh_booking_events").insert({

@@ -56,6 +56,7 @@ export type Booking = {
   stripe_payment_method_id?: string | null;
   fee_charged_cents?: number | null;
   fee_quote_cents?: number | null; // B3: fee amount disclosed at booking — charge this exact value
+  fee_charge_pending?: boolean; // B3: a charge was attempted; reconcile before charging again
   created_at: string;
 };
 

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import * as repo from "@/lib/repo";
 import { sendReminder, sendReviewRequest } from "@/lib/booking";
 import { reconcileOrphanedCalendarEvents } from "@/lib/calendar";
+import { sweepOrphanIntakeFiles } from "@/lib/storage";
 import { captureError } from "@/lib/observe";
 import { tenantSettings } from "@/lib/types";
 import type { Booking } from "@/lib/types";
@@ -30,6 +31,10 @@ export async function GET(req: Request) {
   let reconciled = 0;
   try { reconciled = await reconcileOrphanedCalendarEvents(50); }
   catch (e) { captureError("cron.reconcile", e); }
+  // B5: garbage-collect intake files uploaded but never attached to a booking.
+  let filesSwept = 0;
+  try { filesSwept = (await sweepOrphanIntakeFiles()).deleted; }
+  catch (e) { captureError("cron.sweepFiles", e); }
   const { data: tenants } = await d.from("bh_tenants").select("*");
   let sent = 0, claimed = 0, reviews = 0;
   const svcCache = new Map<string, Awaited<ReturnType<typeof repo.serviceById>>>();
@@ -81,5 +86,5 @@ export async function GET(req: Request) {
       }
     }
   }
-  return NextResponse.json({ ok: true, claimed, sent, reviews, swept, reconciled });
+  return NextResponse.json({ ok: true, claimed, sent, reviews, swept, reconciled, filesSwept });
 }

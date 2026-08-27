@@ -32,6 +32,35 @@ export async function createIntakeDownload(path: string, seconds = 60): Promise<
   return data.signedUrl;
 }
 
+/**
+ * B5 cleanup sweep: GC intake files uploaded but never attached to a booking. Only considers
+ * tracked uploads older than the grace window; keeps files a booking references (and stops tracking
+ * them), deletes the rest from storage. Best-effort and bounded — safe to run on every cron tick.
+ */
+export async function sweepOrphanIntakeFiles(graceHours = 24, max = 200): Promise<{ scanned: number; deleted: number }> {
+  const cutoff = new Date(Date.now() - graceHours * 3600_000).toISOString();
+  const { data } = await db().from("bh_intake_uploads").select("path").lt("created_at", cutoff).limit(max);
+  const rows = (data as { path: string }[]) ?? [];
+  let deleted = 0;
+  for (const r of rows) {
+    try {
+      const used = await db().rpc("bh_intake_path_used", { p_path: r.path });
+      if (used.data === true) {
+        // A booking references it → it's a real attachment. Stop tracking; leave the file.
+        await db().from("bh_intake_uploads").delete().eq("path", r.path);
+      } else {
+        // Orphan → delete the object, then the tracking row.
+        await db().storage.from(INTAKE_BUCKET).remove([r.path]);
+        await db().from("bh_intake_uploads").delete().eq("path", r.path);
+        deleted++;
+      }
+    } catch (e) {
+      console.error("[b5] sweep failed for", r.path, (e as Error).message);
+    }
+  }
+  return { scanned: rows.length, deleted };
+}
+
 /** The value stored on a booking's intake answer for a file: `file::<path>::<name>`. */
 export const FILE_ANSWER_PREFIX = "file::";
 export function encodeFileAnswer(path: string, name: string): string {

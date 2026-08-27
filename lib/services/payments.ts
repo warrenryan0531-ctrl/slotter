@@ -16,7 +16,13 @@ export type SaveCardArgs = { tenant: Tenant; booking: Booking };
 export type SavedCardIntent = { clientSecret: string; publishableKey: string; customerId: string };
 export type RecordCardArgs = { tenant: Tenant; booking: Booking; setupIntentId: string };
 export type RecordedCard = { customerId: string; paymentMethodId: string };
-export type ChargeFeeArgs = { tenant: Tenant; booking: Booking; amountCents: number; description: string; idempotencyKey: string };
+export type ChargeFeeArgs = {
+  tenant: Tenant; booking: Booking; amountCents: number; description: string; idempotencyKey: string;
+  // True when a prior charge attempt is already on record for this booking (fee_charge_pending). In
+  // that case the charge MUST reconcile with Stripe before creating a new PaymentIntent; if it can't,
+  // it refuses rather than risk a duplicate once the idempotency key has expired.
+  mustReconcile?: boolean;
+};
 export type ChargeFeeResult = { chargedCents: number; paymentRef: string };
 
 export interface PaymentPort {
@@ -155,6 +161,7 @@ class StripePayments implements PaymentPort {
     // adopt it instead of creating a new charge. Search is eventually consistent (~1 min), which is
     // fine: the idempotency key + the fee_charged_cents marker cover the immediate window; this covers
     // the long-delayed retry, by which time the prior charge is always indexed.
+    let searchFailed = false;
     try {
       const found = await stripe.paymentIntents.search({
         query: `metadata['booking_id']:'${args.booking.id}' AND metadata['kind']:'no_show_fee' AND status:'succeeded'`,
@@ -162,7 +169,14 @@ class StripePayments implements PaymentPort {
       });
       const prior = found.data[0];
       if (prior) return { chargedCents: prior.amount, paymentRef: prior.id };
-    } catch { /* search unavailable → fall through; idempotency key still prevents a within-window dup */ }
+    } catch { searchFailed = true; }
+    // A prior attempt is on record but we could NOT confirm via search whether it captured. Refuse:
+    // once the ~24h idempotency window is gone, creating a PaymentIntent here could double-charge.
+    // (First-time charges — no prior attempt — are still safe to proceed: the idempotency key covers
+    // the only window in which a duplicate could occur, and there is no earlier charge to duplicate.)
+    if (searchFailed && args.mustReconcile) {
+      throw new Error("fee reconcile unavailable — not charging to avoid a possible duplicate");
+    }
     const pi = await stripe.paymentIntents.create(
       {
         amount: args.amountCents, currency: "usd", customer, payment_method: pm,
