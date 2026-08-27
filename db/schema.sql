@@ -11,7 +11,9 @@ create extension if not exists btree_gist;
 -- ---------- core tables ----------
 create table bh_tenants (
   id uuid primary key default gen_random_uuid(),
-  slug text unique not null,
+  -- Charset locked: the slug is the first path segment of intake-file object keys, and the
+  -- download route's tenant isolation depends on it never containing '/' (see migration 012).
+  slug text unique not null constraint bh_tenants_slug_charset check (slug ~ '^[a-z0-9-]+$'),
   name text not null,
   tz text not null default 'America/New_York',
   branding jsonb not null default '{}',
@@ -40,14 +42,18 @@ create table bh_services (
   buffer_after_min integer not null default 0 check (buffer_after_min >= 0),
   price_cents integer,
   kind text not null check (kind in ('call','appointment','onsite')),
-  location_mode text not null check (location_mode in ('phone','address','business')),
+  location_mode text not null check (location_mode in ('phone','address','business','video')),
   active boolean not null default true,
   sort integer not null default 0,
   deposit_cents integer,
   requires_payment boolean not null default false,
   booking_mode text not null default 'instant' check (booking_mode in ('instant','request')),
   capacity integer not null default 1 check (capacity >= 1),
-  is_group boolean not null default false
+  is_group boolean not null default false,
+  -- B3: no-show / late-cancel fee protection (see db/migrations/011_no_show_fees.sql)
+  protect_no_show boolean not null default false,
+  no_show_fee_cents integer,
+  fee_model text not null default 'flat' check (fee_model in ('flat','percent'))
 );
 
 create table bh_service_staff (
@@ -122,6 +128,11 @@ create table bh_bookings (
   payment_status text not null default 'none' check (payment_status in ('none','awaiting','paid','refunded')),
   deposit_cents integer,
   checkout_ref text,
+  -- B3: vaulted card (on the tenant's Stripe) + one-time no-show/late-cancel fee marker.
+  stripe_customer_id text,
+  stripe_payment_method_id text,
+  fee_charged_cents integer,
+  fee_quote_cents integer, -- fee amount disclosed to the customer at booking time (charge this, not a recomputed value)
   created_at timestamptz not null default now(),
   check (ends_at > starts_at),
   -- Impossible to double-book at the DB level: no two CONFIRMED/PENDING exclusive bookings for one
@@ -161,7 +172,7 @@ create table bh_intake_questions (
   id uuid primary key default gen_random_uuid(),
   service_id uuid not null references bh_services(id) on delete cascade,
   label text not null,
-  type text not null check (type in ('text','textarea','select','phone','address')),
+  type text not null check (type in ('text','textarea','select','phone','address','file')),
   options jsonb,
   required boolean not null default false,
   sort integer not null default 0
@@ -401,17 +412,53 @@ begin
 exception when unique_violation then return false;
 end $$;
 
-create or replace function bh_due_reminders(p_kind text, p_hours numeric)
+-- SECURITY DEFINER selectors bypass RLS, so they MUST filter by tenant themselves. The cron
+-- loops per tenant and passes p_tenant_id; without the filter one tenant's pass would claim and
+-- send another tenant's bookings under the wrong brand. (See db/migrations/010_review_requests.sql.)
+create or replace function bh_due_reminders(p_tenant_id uuid, p_kind text, p_hours numeric)
 returns table (booking_id uuid, tenant_id uuid) language sql security definer set search_path = public as $$
   select b.id, b.tenant_id from bh_bookings b
-  where b.status = 'confirmed' and b.starts_at > now() and b.starts_at <= now() + (p_hours * interval '1 hour')
+  where b.tenant_id = p_tenant_id
+    and b.status = 'confirmed' and b.starts_at > now() and b.starts_at <= now() + (p_hours * interval '1 hour')
     and not exists (select 1 from bh_booking_events e
       where e.booking_id = b.id and e.type = 'notified' and e.payload->>'kind' = p_kind);
+$$;
+
+-- B2 — post-visit review-request selection, tenant-scoped. See db/migrations/010_review_requests.sql.
+-- Completed (ends_at in the [delay, delay+window) hours-ago band), confirmed, not a no-show,
+-- and not already asked. Claim/idempotency reuse bh_claim_reminder(id,'review') + bh_reminder_once.
+create or replace function bh_due_review_requests(p_tenant_id uuid, p_delay_hours numeric, p_window_hours numeric default 48)
+returns table (booking_id uuid, tenant_id uuid) language sql security definer set search_path = public as $$
+  select b.id, b.tenant_id from bh_bookings b
+  where b.tenant_id = p_tenant_id
+    and b.status = 'confirmed'
+    and coalesce(b.no_show, false) = false
+    and b.ends_at <= now() - (p_delay_hours * interval '1 hour')
+    and b.ends_at >  now() - ((p_delay_hours + p_window_hours) * interval '1 hour')
+    and not exists (select 1 from bh_booking_events e
+      where e.booking_id = b.id and e.type = 'notified' and e.payload->>'kind' = 'review');
 $$;
 
 -- ============================================================
 -- v2 · E1 — two-way calendar sync (added 2026-08). See db/migrations/002_calendar_sync.sql.
 -- ============================================================
+-- B1 Layer B — Zoom video-meeting connections (see db/migrations/013_zoom_meetings.sql).
+create table if not exists bh_meeting_connections (
+  id uuid primary key default gen_random_uuid(),
+  staff_id uuid not null references bh_staff(id) on delete cascade,
+  provider text not null check (provider in ('zoom')),
+  account_email text,
+  access_token_enc text,               -- AES-256-GCM, keyed by APP_SECRET (never in DB)
+  refresh_token_enc text,
+  token_expiry timestamptz,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table bh_meeting_connections enable row level security;
+create policy bh_app_key_all on bh_meeting_connections
+  for all using (bh_check_key()) with check (bh_check_key());
+
 create table if not exists bh_calendar_connections (
   id uuid primary key default gen_random_uuid(),
   staff_id uuid not null references bh_staff(id) on delete cascade,
@@ -437,6 +484,7 @@ create table if not exists bh_freebusy_cache (
 );
 
 alter table bh_bookings add column if not exists external_event_ref jsonb not null default '{}';
+alter table bh_bookings add column if not exists meeting_url text; -- B1: provider video-call join link
 alter table bh_bookings add column if not exists no_show boolean not null default false;
 
 alter table bh_calendar_connections enable row level security;
@@ -463,7 +511,7 @@ declare v_id uuid;
 begin
   perform bh_guard();
   if p_kind not in ('call','appointment','onsite') then raise exception 'bad kind %', p_kind; end if;
-  if p_location_mode not in ('phone','address','business') then raise exception 'bad location %', p_location_mode; end if;
+  if p_location_mode not in ('phone','address','business','video') then raise exception 'bad location %', p_location_mode; end if;
   if p_booking_mode not in ('instant','request') then raise exception 'bad booking_mode %', p_booking_mode; end if;
   if p_duration_min <= 0 then raise exception 'duration must be > 0'; end if;
   if p_id is null then
@@ -501,7 +549,7 @@ declare v_id uuid;
 begin
   perform bh_guard();
   if not exists (select 1 from bh_services where id=p_service_id and tenant_id=p_tenant_id) then raise exception 'service not in tenant'; end if;
-  if p_type not in ('text','textarea','select','phone','address') then raise exception 'bad type %', p_type; end if;
+  if p_type not in ('text','textarea','select','phone','address','file') then raise exception 'bad type %', p_type; end if;
   if p_id is null then
     insert into bh_intake_questions (service_id, label, type, options, required, sort)
     values (p_service_id, p_label, p_type, p_options, coalesce(p_required,false), coalesce(p_sort,0)) returning id into v_id;

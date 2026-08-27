@@ -86,10 +86,11 @@ export async function syncBookingToCalendars(
   bookingId: string,
   action: "upsert" | "delete",
   ev?: PushEvent,
-): Promise<void> {
+): Promise<string | null> {
+  let meetingUrl: string | null = null;
   try {
     const rows = (await rowsForStaff(staffId)).filter((r) => r.sync_events);
-    if (!rows.length) return;
+    if (!rows.length) return null;
     const { data: bk } = await db().from("bh_bookings").select("external_event_ref").eq("id", bookingId).limit(1);
     const refs: Record<string, string> = (bk?.[0]?.external_event_ref as Record<string, string>) ?? {};
 
@@ -102,17 +103,21 @@ export async function syncBookingToCalendars(
         if (action === "delete") {
           if (refs[r.id]) { await adapter.deleteEvent(conn, refs[r.id]); delete refs[r.id]; }
         } else if (ev) {
-          const extId = await adapter.upsertEvent(conn, ev, refs[r.id] ?? null);
-          if (extId) refs[r.id] = extId;
+          const res = await adapter.upsertEvent(conn, ev, refs[r.id] ?? null);
+          if (res.id) refs[r.id] = res.id;
+          if (res.meetingUrl && !meetingUrl) meetingUrl = res.meetingUrl; // B1: first provider link wins
         }
       } catch (e) {
         console.error(`[calendar] ${action} failed for connection ${r.id}:`, (e as Error).message);
       }
     }
-    await db().from("bh_bookings").update({ external_event_ref: refs }).eq("id", bookingId);
+    const patch: Record<string, unknown> = { external_event_ref: refs };
+    if (meetingUrl) patch.meeting_url = meetingUrl; // B1: persist so reminders can include the link
+    await db().from("bh_bookings").update(patch).eq("id", bookingId);
   } catch (e) {
     console.error(`[calendar] syncBookingToCalendars outer error:`, (e as Error).message);
   }
+  return meetingUrl;
 }
 
 /** Save a new connection (tokens encrypted at rest). Used by the OAuth callback + demo connect. */

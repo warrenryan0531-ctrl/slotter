@@ -1,7 +1,45 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { loadStripe, type Stripe } from "@stripe/stripe-js";
+import { Elements, CardElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { APP_NAME, SHOW_ATTRIBUTION } from "@/lib/brand";
+
+const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
+// B3: customer card-vault step. The booking already exists; here the customer saves a card
+// (Stripe SetupIntent) so the business can charge a fee ONLY if they no-show / cancel late.
+// Nothing is charged now. "Skip" leaves the booking standing without card protection.
+function CardVaultForm(p: { clientSecret: string; manageToken: string; feeCents: number; onDone: () => void }) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+    const card = elements.getElement(CardElement);
+    if (!card) { setErr("Card field isn't ready yet — one moment."); return; }
+    setBusy(true); setErr(null);
+    const { error, setupIntent } = await stripe.confirmCardSetup(p.clientSecret, { payment_method: { card } });
+    if (error || !setupIntent) { setErr(error?.message ?? "That card couldn't be saved. Please try another."); setBusy(false); return; }
+    try {
+      await fetch("/api/book/card-saved", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ manageToken: p.manageToken, setupIntentId: setupIntent.id }) });
+    } catch { /* the card is vaulted on Stripe; if recording hiccups the owner can retry — don't block the customer */ }
+    setBusy(false); p.onDone();
+  }
+  return (
+    <form onSubmit={submit} className="space-y-3">
+      <div className="rounded-xl border border-gray-200 bg-white p-3">
+        <CardElement options={{ hidePostalCode: false, style: { base: { fontSize: "16px" } } }} />
+      </div>
+      {err && <p className="text-sm text-red-600" data-testid="card-err">{err}</p>}
+      <button type="submit" disabled={busy || !stripe} data-testid="card-save" className="w-full rounded-xl py-2.5 text-sm font-semibold text-white disabled:opacity-60" style={{ background: "var(--bh-color)" }}>
+        {busy ? "Saving…" : "Save card & finish"}
+      </button>
+    </form>
+  );
+}
 
 export type FlowService = {
   id: string; name: string; description: string | null; duration_min: number;
@@ -25,7 +63,7 @@ export type FlowProps = {
   smsEnabled?: boolean;
 };
 
-type Step = "service" | "staff" | "time" | "event" | "details" | "done";
+type Step = "service" | "staff" | "time" | "event" | "details" | "card" | "done";
 type EventOption = { id: string; start: number; end: number; seatsLeft: number; capacity: number };
 
 function fmtTime(ms: number, tz: string): string {
@@ -55,11 +93,36 @@ export default function BookingFlow(p: FlowProps) {
   const [name, setName] = useState(""); const [phone, setPhone] = useState(""); const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [intake, setIntake] = useState<Record<string, string>>({});
+  const [files, setFiles] = useState<Record<string, { status: "up" | "done" | "err"; name?: string; msg?: string }>>({});
+
+  // B5: upload one intake file directly to a scoped signed URL (bytes never touch our server),
+  // then store the answer as `file::<path>::<name>` so the owner gets a secure download link.
+  async function handleFile(qid: string, file: File | undefined) {
+    if (!file) { setFiles((s) => ({ ...s, [qid]: undefined as never })); setIntake((m) => ({ ...m, [qid]: "" })); return; }
+    if (file.size > 10 * 1024 * 1024) { setFiles((s) => ({ ...s, [qid]: { status: "err", msg: "That file is over 10MB." } })); return; }
+    setFiles((s) => ({ ...s, [qid]: { status: "up", name: file.name } }));
+    try {
+      const r = await fetch("/api/intake/upload-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug: p.slug, filename: file.name, contentType: file.type, size: file.size }) });
+      const j = await r.json();
+      if (!r.ok) { setFiles((s) => ({ ...s, [qid]: { status: "err", msg: j.error === "bad_type" ? "Please upload a photo or PDF." : j.error === "too_large" ? "That file is over 10MB." : "Couldn't upload — try again." } })); return; }
+      const put = await fetch(j.signedUrl, { method: "PUT", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file });
+      if (!put.ok) { setFiles((s) => ({ ...s, [qid]: { status: "err", msg: "Upload failed — try again." } })); return; }
+      setIntake((m) => ({ ...m, [qid]: `file::${j.path}::${j.name}` }));
+      setFiles((s) => ({ ...s, [qid]: { status: "done", name: j.name } }));
+    } catch {
+      setFiles((s) => ({ ...s, [qid]: { status: "err", msg: "Network error — try again." } }));
+    }
+  }
   const [smsConsent, setSmsConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manageToken, setManageToken] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [protect, setProtect] = useState<{ clientSecret: string; publishableKey: string; feeCents: number } | null>(null);
+  const stripePromise = useMemo<Promise<Stripe | null> | null>(
+    () => (protect?.publishableKey ? loadStripe(protect.publishableKey) : null),
+    [protect?.publishableKey],
+  );
   const [waitlist, setWaitlist] = useState(false);      // E4: joining a full class's waitlist
   const [waitlistDone, setWaitlistDone] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -171,7 +234,13 @@ export default function BookingFlow(p: FlowProps) {
       if (j.paid && j.paymentUrl) { window.location.href = j.paymentUrl as string; return; } // V3: off to checkout
       setManageToken(j.manageToken);
       setPending(Boolean(j.pending));
-      setStep("done");
+      // B3: protected service returns a card-vault client secret → collect a card before finishing.
+      if (j.protect?.clientSecret && j.protect?.publishableKey) {
+        setProtect({ clientSecret: j.protect.clientSecret, publishableKey: j.protect.publishableKey, feeCents: Number(j.protect.feeCents ?? 0) });
+        setStep("card");
+      } else {
+        setStep("done");
+      }
     } catch {
       setError("Network error — please try again.");
     } finally { setBusy(false); }
@@ -303,6 +372,15 @@ export default function BookingFlow(p: FlowProps) {
                     <option value="">Choose…</option>
                     {q.options.map((o) => <option key={o} value={o}>{o}</option>)}
                   </select>
+                ) : q.type === "file" ? (
+                  <div className="mt-1">
+                    <input type="file" accept="image/*,application/pdf" data-testid={`in-q-${q.id}`}
+                      className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-gray-100 file:px-3 file:py-2 file:text-sm file:font-medium"
+                      onChange={(e) => handleFile(q.id, e.target.files?.[0])} />
+                    {files[q.id]?.status === "up" && <p className="mt-1 text-xs text-gray-500">Uploading {files[q.id]?.name}…</p>}
+                    {files[q.id]?.status === "done" && <p className="mt-1 text-xs text-emerald-600">✓ {files[q.id]?.name} attached</p>}
+                    {files[q.id]?.status === "err" && <p className="mt-1 text-xs text-red-600">{files[q.id]?.msg}</p>}
+                  </div>
                 ) : (
                   <input required={q.required} data-testid={`in-q-${q.id}`} className="mt-1 w-full rounded-lg border border-gray-300 p-2.5"
                     value={intake[q.id] ?? ""} onChange={(e) => setIntake({ ...intake, [q.id]: e.target.value })} />
@@ -328,6 +406,20 @@ export default function BookingFlow(p: FlowProps) {
               <p className="text-center text-xs text-gray-500">{p.tenantName} will confirm your request by email — nothing is locked until they do.</p>
             ) : null}
           </form>
+        </div>
+      )}
+
+      {step === "card" && service && protect && stripePromise && manageToken && (
+        <div data-testid="card-step">
+          <div className="mb-4 text-center">
+            <div className="mx-auto mb-2 h-11 w-11 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-xl">✓</div>
+            <h2 className="font-semibold text-xl">You&apos;re {pending ? "requested" : "booked"}! One last step</h2>
+            <p className="mt-1 text-sm text-gray-600">Save a card to hold your spot. <strong>Nothing is charged now</strong> — {p.tenantName} only charges a {money(protect.feeCents)} fee if you don&apos;t show up for your appointment.</p>
+          </div>
+          <Elements stripe={stripePromise}>
+            <CardVaultForm clientSecret={protect.clientSecret} manageToken={manageToken} feeCents={protect.feeCents} onDone={() => setStep("done")} />
+          </Elements>
+          <button onClick={() => setStep("done")} data-testid="card-skip" className="mt-3 block w-full text-center text-xs text-gray-500 underline">Skip for now</button>
         </div>
       )}
 

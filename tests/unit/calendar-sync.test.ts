@@ -35,7 +35,11 @@ describe("demo calendar adapter", () => {
     const busy = await demo.busy({ id: "x", provider: "demo", externalCalendarId: null, accessToken: null, refreshToken: null, tokenExpiry: null }, from, to);
     expect(busy.length).toBe(2);
     for (const b of busy) expect(b.end - b.start).toBe(3600000); // 1h blocks
-    const id = await demo.upsertEvent({ id: "x", provider: "demo", externalCalendarId: null, accessToken: null, refreshToken: null, tokenExpiry: null }, { bookingId: "bk1", title: "t", start: from, end: to });
-    expect(id).toContain("bk1");
+    const conn = { id: "x", provider: "demo" as const, externalCalendarId: null, accessToken: null, refreshToken: null, tokenExpiry: null };
+    const r = await demo.upsertEvent(conn, { bookingId: "bk1", title: "t", start: from, end: to });
+    expect(r.id).toContain("bk1");
+    expect(r.meetingUrl).toBeNull(); // non-video → no link
+    const rv = await demo.upsertEvent(conn, { bookingId: "bk1", title: "t", start: from, end: to, video: true });
+    expect(rv.meetingUrl).toContain("meet"); // B1: video service → a join link
   });
 });

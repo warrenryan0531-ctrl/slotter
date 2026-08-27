@@ -1,4 +1,5 @@
 import { getSession } from "@/lib/auth";
+import { appMode } from "@/lib/env";
 import { db } from "@/lib/db";
 import { LoginForm } from "@/components/dash";
 import Link from "next/link";
@@ -21,7 +22,7 @@ function maskHtml(html: string): string {
 
 export default async function OutboxPage() {
   const session = await getSession();
-  if (!session) return <LoginForm />;
+  if (!session) return <LoginForm demoHint={appMode() === "demo"} />;
   let q = db().from("bh_outbox_emails").select("*").order("created_at", { ascending: false }).limit(30);
   if (session.role !== "admin" && session.tenantId) q = q.eq("tenant_id", session.tenantId);
   const { data: emails } = await q;

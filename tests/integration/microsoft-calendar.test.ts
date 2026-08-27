@@ -32,11 +32,21 @@ describe("MicrosoftCalendar.busy", () => {
 describe("MicrosoftCalendar.upsertEvent", () => {
   it("POSTs an event with the marker extended property", async () => {
     fetchMock.mockResolvedValueOnce(res(201, { id: "AAMk" }));
-    const id = await m.upsertEvent(conn, { bookingId: "bk9", title: "Consult", start: Date.parse("2026-09-07T17:00:00Z"), end: Date.parse("2026-09-07T18:00:00Z") });
-    expect(id).toBe("AAMk");
+    const r = await m.upsertEvent(conn, { bookingId: "bk9", title: "Consult", start: Date.parse("2026-09-07T17:00:00Z"), end: Date.parse("2026-09-07T18:00:00Z") });
+    expect(r.id).toBe("AAMk");
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.singleValueExtendedProperties[0].value).toBe("bk9");
     expect(body.start.timeZone).toBe("UTC");
+  });
+
+  it("requests a Teams online meeting for a video event and returns joinUrl (B1)", async () => {
+    fetchMock.mockResolvedValueOnce(res(201, { id: "AAMkV", onlineMeeting: { joinUrl: "https://teams.microsoft.com/l/meetup-join/xyz" } }));
+    const r = await m.upsertEvent(conn, { bookingId: "bkv", title: "Consult", start: 0, end: 1, video: true });
+    expect(r.id).toBe("AAMkV");
+    expect(r.meetingUrl).toBe("https://teams.microsoft.com/l/meetup-join/xyz");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.isOnlineMeeting).toBe(true);
+    expect(body.onlineMeetingProvider).toBe("teamsForBusiness");
   });
 });
 

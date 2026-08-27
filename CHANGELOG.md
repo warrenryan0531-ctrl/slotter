@@ -6,6 +6,80 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-08-27
+
+The competitive-gap release ("Phase 1", B1–B5): five features closing the highest-impact gaps
+against Calendly / Cal.com / Square Appointments, each shipped with unit tests, an adversarial
+code review, and a live end-to-end verification.
+
+### Added
+
+- **B1 · Auto video-meeting links** — a service can be located "Video call": every confirmed
+  booking mints a real **Google Meet** or **Microsoft Teams** join link through the owner's
+  connected calendar (`conferenceData.createRequest` / `isOnlineMeeting`), stored on the booking
+  (`meeting_url`) and surfaced everywhere — confirmation email (Join button), `.ics`
+  `LOCATION`/description, reminders, and SMS. Demo mode mints a stub link.
+- **B1 · Zoom as a first-class provider** — owners can Connect Zoom (Availability page; OAuth,
+  AES-256-GCM-encrypted tokens in `bh_meeting_connections`). With Zoom connected, video bookings
+  create a **real Zoom meeting** (join link everywhere the Meet/Teams link goes), **retime it** on
+  reschedule (same link), and **delete it** on cancellation — preferred over the calendar-minted
+  link when both are available. Requires `ZOOM_CLIENT_ID`/`ZOOM_CLIENT_SECRET` (see
+  `.env.example`); without them the Zoom section simply doesn't render.
+- **B2 · Automatic review requests** — post-visit "How was your visit?" asks on autopilot.
+  Settings → "Ask for reviews automatically": toggle, delay (1h–3d), your review link (e.g. a
+  Google review URL), channel (email / text / both, with email as guaranteed fallback). Runs off
+  the reminders cron with the same atomic claim idempotency (`bh_claim_reminder(id,'review')`) —
+  exactly one branded ask per completed booking; cancellations, and no-shows marked before the
+  send time, are skipped. A bounded selection window prevents enabling the feature from blasting
+  historical bookings.
+- **B3 · No-show fees (card-on-file)** — a service can require a card to hold the booking. The
+  customer vaults a card at booking via a Stripe **SetupIntent** on the tenant's own Stripe
+  account (no charge, no PCI exposure — Stripe Elements only). If the owner marks a no-show, a
+  "Charge fee" button charges the fee **once**, off-session, guarded three ways (permanent
+  `fee_charged_cents` marker, Stripe idempotency key, and a reconciliation search that survives
+  key expiry). Flat or percent-of-price fees. **Charging is deliberately owner-initiated only —
+  there is no automatic charging in this release, by explicit design decision.** The amount
+  disclosed to the customer at booking is snapshotted (`fee_quote_cents`) and is the only amount
+  ever charged; on-time cancellations are never chargeable.
+- **B4 · Reports & CSV export** — a new Reports dashboard tab: date-range presets (7/30/90d) and
+  custom ranges, stat cards (booked, revenue collected, no-show rate, cancellations),
+  bookings-per-day and revenue-per-day charts, top-services and per-staff tables — all bucketed in
+  the tenant's timezone. "Download CSV" exports the range's bookings, Excel-clean (UTF-8 BOM,
+  RFC-4180 escaping, **formula-injection neutralized**).
+- **B5 · File upload on intake** — intake questions can be type "File upload (photo / PDF)". The
+  customer uploads at booking straight to a **private** Supabase Storage bucket via a scoped
+  signed URL (10MB cap, image/PDF only, enforced server-side *and* by the bucket); the owner gets
+  a short-lived signed download link on the booking. Tenant isolation verified adversarially —
+  object keys are `<slug>/<uuid>/<sanitized-name>` and downloads are session-gated to the owner's
+  own slug prefix.
+- **No-login demo** — `GET /demo` provisions/reseeds a pristine sample barbershop ("Coastal Cuts")
+  with a fresh day of bookings and drops the visitor straight into the owner dashboard as a
+  signed-in owner. Self-heals on every visit; scoped to the hardcoded sample tenant. Ideal for
+  sales walkthroughs.
+
+### Fixed
+
+- **Cross-tenant cron selection (latent, important)** — `bh_due_reminders` ran unscoped inside a
+  per-tenant loop, so reminders (and the new review asks) could claim and send another tenant's
+  bookings under the wrong brand. Both selector RPCs are now tenant-scoped
+  (`p_tenant_id`) with a defensive tenant re-check in the cron. Multi-tenant hubs should apply
+  migration 010 promptly.
+- **HTML injection in notification emails** — customer-supplied values (name, intake answers,
+  address) are now HTML-escaped before interpolation into owner/customer email bodies.
+
+### Security
+
+- Tenant slug charset is now enforced at the database (`^[a-z0-9-]+$`), locking the invariant the
+  intake-file isolation depends on; login demo-hint credentials render only in demo mode; intake
+  upload endpoint rate-limited; CSV export neutralizes formula injection.
+
+### Migrations
+
+- `009_video_meetings.sql`, `010_review_requests.sql` (**required** — replaces
+  `bh_due_reminders(text,numeric)` with a tenant-scoped 3-arg version), `011_no_show_fees.sql`,
+  `012_intake_files.sql` (+ private `intake` storage bucket per its header comments),
+  `013_zoom_meetings.sql`.
+
 ## [2.2.0] — 2026-08-24
 
 Design + theming release, plus per-tenant SMS numbers and per-tenant booking-page branding.

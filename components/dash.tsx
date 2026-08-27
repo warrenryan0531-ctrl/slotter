@@ -8,7 +8,7 @@ async function post(url: string, body: Record<string, unknown>): Promise<{ ok: b
   return r.ok ? { ok: true } : { ok: false, error: (await r.json().catch(() => ({})))?.error };
 }
 
-export function LoginForm() {
+export function LoginForm(p: { demoHint?: boolean } = {}) {
   const router = useRouter();
   const [stage, setStage] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");
@@ -53,9 +53,11 @@ export function LoginForm() {
               <button disabled={busy} data-testid="login-verify" className="btn btn-primary w-full">{busy ? "Checking…" : "Sign in"}</button>
             </form>
           )}
-          <div className="mt-4 rounded-lg border border-brand-100 bg-brand-50 p-3 text-xs text-brand-900" data-testid="demo-hint">
-            <strong>Demo:</strong> owner@coastalshine.demo or maria@riveralaw.demo · code <strong>123456</strong>
-          </div>
+          {p.demoHint && (
+            <div className="mt-4 rounded-lg border border-brand-100 bg-brand-50 p-3 text-xs text-brand-900" data-testid="demo-hint">
+              <strong>Demo:</strong> owner@coastalshine.demo or maria@riveralaw.demo · code <strong>123456</strong>
+            </div>
+          )}
         </div>
       </div>
     </main>
@@ -318,6 +320,70 @@ export function RemindersForm(p: { initial: number[] }) {
   );
 }
 
+export function ReviewRequestForm(p: { initial: { enabled: boolean; delayHours: number; url: string; channel: "email" | "sms" | "both" } }) {
+  const router = useRouter();
+  const [enabled, setEnabled] = useState(p.initial.enabled);
+  const [delayHours, setDelayHours] = useState(p.initial.delayHours);
+  const [url, setUrl] = useState(p.initial.url);
+  const [channel, setChannel] = useState(p.initial.channel);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const delays: [number, string][] = [[1, "1 hour after"], [3, "3 hours after"], [6, "6 hours after"], [24, "1 day after"], [48, "2 days after"], [72, "3 days after"]];
+  const dirty = () => { setSaved(false); setErr(null); };
+  return (
+    <form className="card card-pad space-y-4" onSubmit={async (e) => {
+      e.preventDefault();
+      if (enabled && !url.trim()) { setErr("Add your review link first."); return; }
+      setBusy(true); setErr(null);
+      const res = await post("/api/dashboard", { action: "update_review_request", enabled, delayHours, url: url.trim(), channel });
+      setBusy(false);
+      if (!res.ok) { setErr(res.error === "bad_url" ? "That doesn't look like a valid link." : res.error === "url_required" ? "Add your review link first." : "Couldn't save — try again."); return; }
+      setSaved(true); router.refresh();
+    }}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="font-medium text-ink">Automatically ask for a review</p>
+          <p className="mt-0.5 text-sm text-[#64726b]">After each appointment, we&apos;ll send the customer a friendly note asking them to leave you a review. Cancellations, and anyone you mark as a no-show before the send time, are skipped — so pick a delay that gives you time to mark no-shows.</p>
+        </div>
+        <button type="button" role="switch" aria-checked={enabled} aria-label="Automatically ask for a review" onClick={() => { dirty(); setEnabled(!enabled); }} data-testid="toggle-review"
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${enabled ? "bg-brand-600" : "bg-gray-300"}`}>
+          <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${enabled ? "left-[22px]" : "left-0.5"}`} />
+        </button>
+      </div>
+
+      <label className="block">
+        <span className="label">Your review link (e.g. your Google review URL)</span>
+        <input type="url" inputMode="url" placeholder="https://g.page/r/…/review" className="input" data-testid="review-url"
+          value={url} onChange={(e) => { dirty(); setUrl(e.target.value); }} />
+      </label>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="label">When to send</span>
+          <select className="input" data-testid="review-delay" value={delayHours} onChange={(e) => { dirty(); setDelayHours(Number(e.target.value)); }}>
+            {delays.map(([h, l]) => <option key={h} value={h}>{l}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="label">How to send</span>
+          <select className="input" data-testid="review-channel" value={channel} onChange={(e) => { dirty(); setChannel(e.target.value as "email" | "sms" | "both"); }}>
+            <option value="email">Email</option>
+            <option value="sms">Text</option>
+            <option value="both">Email + text</option>
+          </select>
+        </label>
+      </div>
+      {channel !== "email" && <p className="text-xs text-[#64726b]">Texts only go to customers who opted in when booking — everyone else still gets the email.</p>}
+
+      {err && <p className="text-sm text-red-600" data-testid="review-err">{err}</p>}
+      <button disabled={busy} data-testid="review-save" className="btn btn-primary">
+        {busy ? "Saving…" : saved ? "Saved ✓" : "Save review requests"}
+      </button>
+    </form>
+  );
+}
+
 export function DemoPayButtons(p: { token: string; slug: string; amount: string }) {
   const [busy, setBusy] = useState<"" | "pay" | "cancel">("");
   const act = async (action: "pay" | "cancel") => {
@@ -373,6 +439,7 @@ type SvcInit = {
   price_cents?: number | null; kind?: string; location_mode?: string; booking_mode?: string;
   is_group?: boolean; capacity?: number; requires_payment?: boolean; deposit_cents?: number | null;
   buffer_before_min?: number; buffer_after_min?: number; active?: boolean; sort?: number;
+  protect_no_show?: boolean; no_show_fee_cents?: number | null; fee_model?: "flat" | "percent";
 };
 
 export function ServiceEditor(p: { staff: { id: string; name: string }[]; assigned?: string[]; service?: SvcInit; startOpen?: boolean }) {
@@ -388,6 +455,9 @@ export function ServiceEditor(p: { staff: { id: string; name: string }[]; assign
     booking_mode: s.booking_mode ?? "instant", is_group: s.is_group ?? false, capacity: s.capacity ?? 1,
     requires_payment: s.requires_payment ?? false, deposit: s.deposit_cents != null ? (s.deposit_cents / 100).toString() : "",
     pay_mode: (s as { pay_mode?: string }).pay_mode ?? "deposit",
+    protect_no_show: s.protect_no_show ?? false,
+    fee_model: s.fee_model ?? "flat",
+    fee_amount: s.no_show_fee_cents != null ? (s.fee_model === "percent" ? String(s.no_show_fee_cents) : (s.no_show_fee_cents / 100).toString()) : "",
     buffer_before_min: s.buffer_before_min ?? 0, buffer_after_min: s.buffer_after_min ?? 0, active: s.active ?? true,
   });
   const [assigned, setAssigned] = useState<string[]>(p.assigned ?? p.staff.map((x) => x.id));
@@ -404,6 +474,11 @@ export function ServiceEditor(p: { staff: { id: string; name: string }[]; assign
       is_group: f.is_group, capacity: Number(f.capacity), requires_payment: f.requires_payment,
       deposit_cents: f.requires_payment && f.deposit !== "" ? Math.round(parseFloat(f.deposit) * 100) : null,
       pay_mode: f.pay_mode,
+      protect_no_show: f.protect_no_show,
+      fee_model: f.fee_model,
+      no_show_fee_cents: f.protect_no_show && f.fee_amount !== ""
+        ? (f.fee_model === "percent" ? Math.round(parseFloat(f.fee_amount)) : Math.round(parseFloat(f.fee_amount) * 100))
+        : null,
       buffer_before_min: Number(f.buffer_before_min), buffer_after_min: Number(f.buffer_after_min), active: f.active,
     };
     const r = await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "upsert_service", service: svc }) });
@@ -422,13 +497,17 @@ export function ServiceEditor(p: { staff: { id: string; name: string }[]; assign
         <label><span className="label">Duration (min)</span><input type="number" className="input" value={f.duration_min} onChange={(e) => set("duration_min", e.target.value)} /></label>
         <label><span className="label">Price ($)</span><input type="number" step="0.01" className="input" value={f.price} onChange={(e) => set("price", e.target.value)} placeholder="optional" /></label>
         <label><span className="label">Type</span><select className="input" value={f.kind} onChange={(e) => set("kind", e.target.value)}><option value="appointment">In-person (they come to you)</option><option value="onsite">On-site (you go to them)</option><option value="call">Phone / call</option></select></label>
-        <label><span className="label">Location</span><select className="input" value={f.location_mode} onChange={(e) => set("location_mode", e.target.value)}><option value="business">At the business</option><option value="address">Customer address</option><option value="phone">Phone</option></select></label>
+        <label><span className="label">Location</span><select className="input" value={f.location_mode} onChange={(e) => set("location_mode", e.target.value)}><option value="business">At the business</option><option value="address">Customer address</option><option value="phone">Phone</option><option value="video">Video call (auto meeting link)</option></select></label>
         <label><span className="label">Confirmation</span><select data-testid="svc-mode" className="input" value={f.booking_mode} onChange={(e) => set("booking_mode", e.target.value)}><option value="instant">Auto-confirm</option><option value="request">Approve each request</option></select></label>
         <label className="mt-6 flex items-center gap-2 text-sm text-[#42504a]"><input type="checkbox" className="accent-brand-600" checked={f.is_group} onChange={(e) => set("is_group", e.target.checked)} /> Group class</label>
         {f.is_group && <label><span className="label">Capacity</span><input type="number" className="input" value={f.capacity} onChange={(e) => set("capacity", e.target.value)} /></label>}
         <label className="mt-6 flex items-center gap-2 text-sm text-[#42504a]"><input type="checkbox" className="accent-brand-600" checked={f.requires_payment} onChange={(e) => set("requires_payment", e.target.checked)} /> Require a deposit</label>
         {f.requires_payment && <label><span className="label">Deposit ($)</span><input type="number" step="0.01" className="input" value={f.deposit} onChange={(e) => set("deposit", e.target.value)} /></label>}
         {f.requires_payment && <label><span className="label">Charge</span><select className="input" value={f.pay_mode} onChange={(e) => set("pay_mode", e.target.value)}><option value="deposit">Deposit to hold</option><option value="full">Pay in full</option></select></label>}
+        <label className="col-span-2 mt-2 flex items-center gap-2 text-sm text-[#42504a]"><input type="checkbox" data-testid="svc-protect" className="accent-brand-600" checked={f.protect_no_show} onChange={(e) => set("protect_no_show", e.target.checked)} /> Ask for a card to cover no-show fees</label>
+        {f.protect_no_show && <label><span className="label">Fee type</span><select data-testid="svc-fee-model" className="input" value={f.fee_model} onChange={(e) => set("fee_model", e.target.value)}><option value="flat">Flat amount</option><option value="percent">% of price</option></select></label>}
+        {f.protect_no_show && <label><span className="label">{f.fee_model === "percent" ? "Fee (% of price)" : "Fee ($)"}</span><input type="number" step={f.fee_model === "percent" ? "1" : "0.01"} data-testid="svc-fee-amount" className="input" value={f.fee_amount} onChange={(e) => set("fee_amount", e.target.value)} placeholder={f.fee_model === "percent" ? "e.g. 50" : "e.g. 25.00"} /></label>}
+        {f.protect_no_show && <p className="col-span-2 -mt-1 text-xs text-[#64726b]">Requires your Stripe connected in Settings. The customer saves a card when booking — nothing is charged unless you mark a no-show and choose to charge the fee.</p>}
       </div>
       {p.staff.length > 0 && (
         <div className="mt-3 text-sm"><span className="text-[#64726b]">Who performs this:</span>
@@ -490,7 +569,7 @@ export function IntakeEditor(p: { serviceId: string; questions: { id: string; la
       ))}
       <div className="flex flex-wrap items-center gap-2">
         <input className="field" placeholder="Question (e.g. Vehicle make/model)" value={label} onChange={(e) => setLabel(e.target.value)} data-testid={`intake-label-${p.serviceId}`} />
-        <select className="field bg-white" value={type} onChange={(e) => setType(e.target.value)}><option value="text">Short text</option><option value="textarea">Long text</option><option value="phone">Phone</option><option value="address">Address</option></select>
+        <select className="field bg-white" value={type} onChange={(e) => setType(e.target.value)}><option value="text">Short text</option><option value="textarea">Long text</option><option value="phone">Phone</option><option value="address">Address</option><option value="file">File upload (photo / PDF)</option></select>
         <label className="flex items-center gap-1 text-sm text-[#42504a]"><input type="checkbox" className="accent-brand-600" checked={required} onChange={(e) => setRequired(e.target.checked)} /> Required</label>
         <button disabled={busy || !label} onClick={add} className="btn btn-secondary btn-sm" data-testid={`intake-add-${p.serviceId}`}>Add question</button>
       </div>

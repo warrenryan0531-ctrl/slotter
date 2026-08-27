@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import * as repo from "@/lib/repo";
-import { sendReminder } from "@/lib/booking";
+import { sendReminder, sendReviewRequest } from "@/lib/booking";
 import { reconcileOrphanedCalendarEvents } from "@/lib/calendar";
 import { captureError } from "@/lib/observe";
 import { tenantSettings } from "@/lib/types";
@@ -31,22 +31,26 @@ export async function GET(req: Request) {
   try { reconciled = await reconcileOrphanedCalendarEvents(50); }
   catch (e) { captureError("cron.reconcile", e); }
   const { data: tenants } = await d.from("bh_tenants").select("*");
-  let sent = 0, claimed = 0;
+  let sent = 0, claimed = 0, reviews = 0;
   const svcCache = new Map<string, Awaited<ReturnType<typeof repo.serviceById>>>();
+  const svc = async (id: string) => {
+    let s = svcCache.get(id);
+    if (s === undefined) { s = await repo.serviceById(id); svcCache.set(id, s); }
+    return s;
+  };
 
   for (const t of tenants ?? []) {
     const offsets = tenantSettings(t).reminderHours;
     for (const hours of offsets) {
       const kind = `${hours}h`;
-      const { data: due } = await d.rpc("bh_due_reminders", { p_kind: kind, p_hours: hours });
+      const { data: due } = await d.rpc("bh_due_reminders", { p_tenant_id: t.id, p_kind: kind, p_hours: hours });
       for (const row of (due ?? []) as { booking_id: string }[]) {
         const ok = await d.rpc("bh_claim_reminder", { p_booking_id: row.booking_id, p_kind: kind });
         if (ok.error || ok.data !== true) continue; // already reminded / lost the race
         claimed++;
         const booking = await repo.bookingById(row.booking_id);
-        if (!booking || booking.status !== "confirmed") continue;
-        let service = svcCache.get(booking.service_id);
-        if (service === undefined) { service = await repo.serviceById(booking.service_id); svcCache.set(booking.service_id, service); }
+        if (!booking || booking.tenant_id !== t.id || booking.status !== "confirmed") continue;
+        const service = await svc(booking.service_id);
         if (!service) continue;
         try {
           await sendReminder(t, service, booking as Booking, kind);
@@ -56,6 +60,26 @@ export async function GET(req: Request) {
         }
       }
     }
+
+    // B2: post-visit review requests. Same claim-then-send idempotency as reminders.
+    const rr = tenantSettings(t).reviewRequest;
+    if (rr.enabled) {
+      const { data: dueR } = await d.rpc("bh_due_review_requests", { p_tenant_id: t.id, p_delay_hours: rr.delayHours });
+      for (const row of (dueR ?? []) as { booking_id: string }[]) {
+        const ok = await d.rpc("bh_claim_reminder", { p_booking_id: row.booking_id, p_kind: "review" });
+        if (ok.error || ok.data !== true) continue; // already asked / lost the race
+        const booking = await repo.bookingById(row.booking_id);
+        if (!booking || booking.tenant_id !== t.id || booking.status !== "confirmed" || booking.no_show) continue;
+        const service = await svc(booking.service_id);
+        if (!service) continue;
+        try {
+          await sendReviewRequest(t, service, booking as Booking);
+          reviews++;
+        } catch {
+          // send failed after claim — one ask may be missed rather than duplicated (safe direction)
+        }
+      }
+    }
   }
-  return NextResponse.json({ ok: true, claimed, sent, swept, reconciled });
+  return NextResponse.json({ ok: true, claimed, sent, reviews, swept, reconciled });
 }

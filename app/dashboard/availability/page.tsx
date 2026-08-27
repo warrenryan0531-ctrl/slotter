@@ -2,6 +2,7 @@ import { getSession } from "@/lib/auth";
 import * as repo from "@/lib/repo";
 import { fmtInTz } from "@/lib/engine/tz";
 import { listConnections } from "@/lib/calendar";
+import { listZoomConnections, zoomConfigured } from "@/lib/meetings";
 import { APP_NAME } from "@/lib/brand";
 import { CalendarConnectGuide } from "@/components/guides";
 import { BlockForm, RuleForm, OverrideForm, DashAction } from "@/components/dash";
@@ -23,6 +24,8 @@ export default async function AvailabilityPage() {
   // Calendar sync connections for the owner's own staff record.
   const ownerStaff = staff.find((s) => s.email?.toLowerCase() === session.email.toLowerCase()) ?? staff.find((s) => s.is_owner) ?? staff[0];
   const connections = ownerStaff ? await listConnections(ownerStaff.id) : [];
+  const zoomConns = ownerStaff ? await listZoomConnections(ownerStaff.id) : [];
+  const showZoom = zoomConfigured();
 
   return (
     <div className="space-y-8">
@@ -47,6 +50,25 @@ export default async function AvailabilityPage() {
           <CalendarConnectGuide defaultOpen={connections.length === 0} />
         </div>
       </section>
+
+      {showZoom && (
+        <section data-testid="zoom-sync">
+          <h2 className="font-semibold text-lg mb-1">Zoom meetings</h2>
+          <p className="text-sm text-gray-600 mb-3">Connect your Zoom account and every video-call booking gets a real Zoom meeting with a join link — created automatically, moved when the customer reschedules, and removed if they cancel. Without Zoom, video bookings use a Google Meet or Teams link from your connected calendar.</p>
+          <div className="space-y-2 mb-3">
+            {zoomConns.map((c) => (
+              <div key={c.id} className="card flex items-center justify-between p-3 text-sm" data-testid="zoom-connection">
+                <span><strong>Zoom</strong>{c.account_email ? ` · ${c.account_email}` : ""}</span>
+                {ownerStaff && <DashAction label="Disconnect" body={{ action: "disconnect_zoom", id: c.id, staffId: ownerStaff.id }} testid={`zoom-disc-${c.id}`} />}
+              </div>
+            ))}
+            {zoomConns.length === 0 && <p className="text-sm text-gray-500" data-testid="no-zoom">No Zoom account connected yet.</p>}
+          </div>
+          {zoomConns.length === 0 && (
+            <a href="/api/zoom/connect" className="btn btn-primary btn-sm" data-testid="connect-zoom">Connect Zoom</a>
+          )}
+        </section>
+      )}
 
       <section>
         <h2 className="font-semibold text-lg mb-1">Block off time</h2>

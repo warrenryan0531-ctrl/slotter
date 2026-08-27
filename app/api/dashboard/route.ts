@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import * as repo from "@/lib/repo";
-import { notifyBooking, decideBooking, refundBooking, promoteWaitlist, markNoShow } from "@/lib/booking";
+import { notifyBooking, decideBooking, refundBooking, promoteWaitlist, markNoShow, chargeNoShowFee } from "@/lib/booking";
 import { removeConnection, listConnections } from "@/lib/calendar";
+import { listZoomConnections, removeZoomConnection } from "@/lib/meetings";
 import { newToken } from "@/lib/auth";
 
 type Body = { action: string; [k: string]: unknown };
@@ -40,7 +41,30 @@ export async function POST(req: Request) {
       if (s.pay_mode === "deposit" || s.pay_mode === "full") {
         await d.from("bh_services").update({ pay_mode: s.pay_mode }).eq("id", data).eq("tenant_id", tenantId);
       }
+      // B3: no-show fee fields, same follow-up-update pattern (kept out of the RPC signature).
+      if (s.protect_no_show !== undefined || s.no_show_fee_cents !== undefined || s.fee_model !== undefined) {
+        const protect = Boolean(s.protect_no_show);
+        const model = s.fee_model === "percent" ? "percent" : "flat";
+        const raw = Number(s.no_show_fee_cents);
+        // flat: $1–$1000 (cents). percent: 1–100. Clamp defensively; 0/invalid disables the charge.
+        let fee: number | null = null;
+        if (Number.isFinite(raw) && raw > 0) {
+          fee = model === "percent" ? Math.min(Math.round(raw), 100) : Math.min(Math.max(Math.round(raw), 100), 100000);
+        }
+        await d.from("bh_services").update({ protect_no_show: protect, fee_model: model, no_show_fee_cents: fee }).eq("id", data).eq("tenant_id", tenantId);
+      }
       return NextResponse.json({ ok: true, id: data });
+    }
+    // B3: owner-initiated no-show / late-cancel fee charge. Tenant-scoped; the domain fn re-checks
+    // every guard (protected, eligible, card on file, not already charged) and is idempotent.
+    case "charge_no_show_fee": {
+      const bookingId = String(body.bookingId ?? "");
+      if (!bookingId) return NextResponse.json({ error: "bad_request" }, { status: 400 });
+      const booking = await repo.bookingById(bookingId);
+      if (!booking || booking.tenant_id !== tenantId) return NextResponse.json({ error: "not_found" }, { status: 404 });
+      const res = await chargeNoShowFee(bookingId);
+      if (!res.ok) return NextResponse.json({ error: res.reason }, { status: 400 });
+      return NextResponse.json({ ok: true, chargedCents: res.chargedCents });
     }
     case "delete_service": {
       const { error } = await d.rpc("bh_delete_service", { p_tenant_id: tenantId, p_id: String(body.id ?? "") });
@@ -83,6 +107,16 @@ export async function POST(req: Request) {
       const owned = (await listConnections(staffId)).some((c) => c.id === connId);
       if (!owned) return NextResponse.json({ error: "bad_request" }, { status: 400 });
       await removeConnection(connId);
+      return NextResponse.json({ ok: true });
+    }
+    // B1 Layer B: disconnect a Zoom meeting connection (tenant-scoped via ownStaff + staff match).
+    case "disconnect_zoom": {
+      const staffId = String(body.staffId ?? "");
+      const connId = String(body.id ?? "");
+      if (!(await ownStaff(staffId))) return NextResponse.json({ error: "bad_request" }, { status: 400 });
+      const owned = (await listZoomConnections(staffId)).some((c) => c.id === connId);
+      if (!owned) return NextResponse.json({ error: "bad_request" }, { status: 400 });
+      await removeZoomConnection(connId, staffId);
       return NextResponse.json({ ok: true });
     }
     case "add_block": {
@@ -161,6 +195,32 @@ export async function POST(req: Request) {
       const key = String(body.key ?? "");
       if (!FEATURE_KEYS.includes(key)) return NextResponse.json({ error: "bad_feature", field: key }, { status: 400 });
       const s = { ...t.settings, [key]: Boolean(body.value) };
+      await d.from("bh_tenants").update({ settings: s }).eq("id", tenantId);
+      return NextResponse.json({ ok: true });
+    }
+    // B2: post-visit review-request automation settings.
+    case "update_review_request": {
+      const t = await repo.tenantById(tenantId);
+      if (!t) return NextResponse.json({ error: "bad_request" }, { status: 400 });
+      const enabled = Boolean(body.enabled);
+      const ALLOWED_DELAYS = [1, 3, 6, 24, 48, 72];
+      const delay = Number(body.delayHours);
+      const delayHours = ALLOWED_DELAYS.includes(delay) ? delay : 3;
+      const channel = ["email", "sms", "both"].includes(String(body.channel)) ? String(body.channel) : "email";
+      const rawUrl = typeof body.url === "string" ? body.url.trim().slice(0, 500) : "";
+      let url = "";
+      if (rawUrl) {
+        try {
+          const u = new URL(rawUrl);
+          if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("proto");
+          url = u.toString();
+        } catch {
+          return NextResponse.json({ error: "bad_url", field: "url" }, { status: 400 });
+        }
+      }
+      // Can't enable without a destination to send people to.
+      if (enabled && !url) return NextResponse.json({ error: "url_required", field: "url" }, { status: 400 });
+      const s = { ...t.settings, review_enabled: enabled, review_delay_hours: delayHours, review_url: url, review_channel: channel };
       await d.from("bh_tenants").update({ settings: s }).eq("id", tenantId);
       return NextResponse.json({ ok: true });
     }

@@ -1,4 +1,5 @@
 import { getSession } from "@/lib/auth";
+import { appMode } from "@/lib/env";
 import { db } from "@/lib/db";
 import { AdminImpersonate, LoginForm, CreateTenant, LogoutButton } from "@/components/dash";
 import { ThemePicker } from "@/components/theme";
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 export default async function AdminPage() {
   const session = await getSession();
-  if (!session) return <LoginForm />;
+  if (!session) return <LoginForm demoHint={appMode() === "demo"} />;
   if (session.role !== "admin") {
     return <main className="min-h-screen flex items-center justify-center"><p className="text-[#64726b]" data-testid="admin-forbidden">403 — admin only.</p></main>;
   }

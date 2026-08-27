@@ -4,6 +4,17 @@ import * as repo from "@/lib/repo";
 import { describeWhen } from "@/lib/booking";
 import { listConnections } from "@/lib/calendar";
 import { DashAction } from "@/components/dash";
+import { parseFileAnswer } from "@/lib/storage";
+
+// B5: an intake answer renders as a secure download link when it's a file, else as plain text.
+function IntakeLine({ label, value }: { label: string; value: string }) {
+  const f = parseFileAnswer(value);
+  return (
+    <p className="mt-0.5 text-xs text-[#7a8880]"><em>{label}:</em> {f
+      ? <a className="text-brand-700 underline underline-offset-2" href={`/api/intake/file?path=${encodeURIComponent(f.path)}`} target="_blank" rel="noopener noreferrer">📎 {f.name}</a>
+      : value}</p>
+  );
+}
 
 export const dynamic = "force-dynamic";
 
@@ -120,7 +131,7 @@ export default async function TodayPage() {
                     {b.address && <p className="text-sm text-[#64726b]">{b.address.line}</p>}
                     {staff.length > 1 && who(b.staff_id) && <p className="mt-1 text-xs text-[#7a8880]">with {who(b.staff_id)}</p>}
                     {Object.entries(b.intake_answers).map(([k, v]) => (
-                      <p key={k} className="mt-0.5 text-xs text-[#7a8880]"><em>{k}:</em> {v}</p>
+                      <IntakeLine key={k} label={k} value={v} />
                     ))}
                   </div>
                   <div className="flex shrink-0 flex-col gap-2">
@@ -158,7 +169,7 @@ export default async function TodayPage() {
                   {b.address && <p className="text-sm text-[#64726b]">{b.address.line}</p>}
                   {staff.length > 1 && who(b.staff_id) && <p className="mt-1 text-xs text-[#7a8880]">with {who(b.staff_id)}</p>}
                   {Object.entries(b.intake_answers).map(([k, v]) => (
-                    <p key={k} className="mt-0.5 text-xs text-[#7a8880]"><em>{k}:</em> {v}</p>
+                    <IntakeLine key={k} label={k} value={v} />
                   ))}
                 </div>
               </div>

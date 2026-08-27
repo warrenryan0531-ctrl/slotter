@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import * as repo from "@/lib/repo";
-import { createBooking, registerForEvent, startPaidBooking } from "@/lib/booking";
+import { createBooking, registerForEvent, startPaidBooking, computeFeeCents } from "@/lib/booking";
+import { getServices } from "@/lib/services";
 import { rateLimit, ipOf } from "@/lib/ratelimit";
 import { intakeQuestions } from "@/lib/repo";
 
@@ -98,6 +99,27 @@ export async function POST(req: Request) {
   if (!result.ok) {
     const status = result.reason === "conflict" ? 409 : 400;
     return NextResponse.json({ error: result.reason }, { status });
+  }
+
+  // ---- B3: protected service → begin vaulting a card (SetupIntent, NO charge). The booking is
+  // already created; if the tenant hasn't configured Stripe, or vaulting fails, the booking simply
+  // proceeds without card protection rather than failing the customer's booking.
+  if (service.protect_no_show) {
+    try {
+      const { pay } = getServices();
+      const feeCents = computeFeeCents(service);
+      // Snapshot the disclosed fee onto the booking NOW, so a later change to the service's fee
+      // config can never charge the customer a different amount than they were shown (F2).
+      const { db } = await import("@/lib/db");
+      await db().from("bh_bookings").update({ fee_quote_cents: feeCents }).eq("id", result.booking.id);
+      const vault = await pay.saveCardIntent({ tenant, booking: result.booking });
+      return NextResponse.json({
+        ok: true, manageToken: result.booking.manage_token, pending: result.pending,
+        protect: { clientSecret: vault.clientSecret, publishableKey: vault.publishableKey, feeCents },
+      });
+    } catch (e) {
+      console.error("[b3] card vault setup failed (booking still stands):", (e as Error).message);
+    }
   }
   return NextResponse.json({ ok: true, manageToken: result.booking.manage_token, pending: result.pending });
 }

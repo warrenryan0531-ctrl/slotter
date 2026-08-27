@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
+import { appMode } from "@/lib/env";
 import { tenantById, allServices, staffForTenant } from "@/lib/repo";
 import { LoginForm } from "@/components/dash";
 import { DashShell, type Tab } from "@/components/nav";
@@ -17,7 +18,7 @@ function initialsFrom(s: string): string {
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
-  if (!session) return <LoginForm />;
+  if (!session) return <LoginForm demoHint={appMode() === "demo"} />;
   if (!session.tenantId) {
     // admin without impersonation → send to admin home
     return (
@@ -45,6 +46,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     { href: "/dashboard", label: "Today", icon: "today" },
     { href: "/dashboard/onboarding", label: "Setup", icon: "setup" },
     { href: "/dashboard/bookings", label: "Bookings", icon: "bookings" },
+    { href: "/dashboard/reports", label: "Reports", icon: "reports" },
     ...(hasGroup ? [{ href: "/dashboard/classes", label: "Classes", icon: "classes" } as Tab] : []),
     { href: "/dashboard/availability", label: "Availability", icon: "availability" },
     { href: "/dashboard/services", label: "Services", icon: "services" },

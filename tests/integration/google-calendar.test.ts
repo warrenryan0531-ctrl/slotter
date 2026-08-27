@@ -42,11 +42,21 @@ describe("GoogleCalendar.busy", () => {
 describe("GoogleCalendar.upsertEvent", () => {
   it("POSTs a new event with our marker and returns the id", async () => {
     fetchMock.mockResolvedValueOnce(res(200, { id: "evt_new" }));
-    const id = await g.upsertEvent(conn, { bookingId: "bk9", title: "Cut", start: Date.parse("2026-09-07T17:00:00Z"), end: Date.parse("2026-09-07T18:00:00Z") });
-    expect(id).toBe("evt_new");
+    const r = await g.upsertEvent(conn, { bookingId: "bk9", title: "Cut", start: Date.parse("2026-09-07T17:00:00Z"), end: Date.parse("2026-09-07T18:00:00Z") });
+    expect(r.id).toBe("evt_new");
     const [, opts] = fetchMock.mock.calls[0];
     expect(opts.method).toBe("POST");
     expect(JSON.parse(opts.body).extendedProperties.private.slotterBookingId).toBe("bk9");
+  });
+
+  it("requests a Meet link for a video event and returns hangoutLink (B1)", async () => {
+    fetchMock.mockResolvedValueOnce(res(200, { id: "evt_v", hangoutLink: "https://meet.google.com/abc-defg-hij" }));
+    const r = await g.upsertEvent(conn, { bookingId: "bkv", title: "Consult", start: 0, end: 1, video: true });
+    expect(r.id).toBe("evt_v");
+    expect(r.meetingUrl).toBe("https://meet.google.com/abc-defg-hij");
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toContain("conferenceDataVersion=1");
+    expect(JSON.parse(opts.body).conferenceData.createRequest.conferenceSolutionKey.type).toBe("hangoutsMeet");
   });
 
   it("PATCHes when an existing id is passed", async () => {

@@ -22,7 +22,11 @@ export type PushEvent = {
   location?: string;
   start: number; // UTC ms
   end: number;
+  video?: boolean; // B1: request a provider video-conference link (Google Meet / MS Teams)
 };
+
+/** Result of an event upsert: the external event id, plus a video join URL when one was minted. */
+export type UpsertResult = { id: string | null; meetingUrl?: string | null };
 
 /** Fresh token material to persist (re-encrypted by the caller), or null if unchanged. */
 export type RefreshedToken = { accessToken: string; tokenExpiry: string } | null;
@@ -30,8 +34,8 @@ export type RefreshedToken = { accessToken: string; tokenExpiry: string } | null
 export interface CalendarAdapter {
   /** External busy intervals in [fromMs,toMs), EXCLUDING Slotter-authored events (R3). */
   busy(conn: CalConnection, fromMs: number, toMs: number): Promise<Interval[]>;
-  /** Create or update the calendar event for this booking; returns the external event id. */
-  upsertEvent(conn: CalConnection, ev: PushEvent, existingId?: string | null): Promise<string | null>;
+  /** Create or update the calendar event for this booking; returns the external event id (+ video link). */
+  upsertEvent(conn: CalConnection, ev: PushEvent, existingId?: string | null): Promise<UpsertResult>;
   /** Remove the event (best-effort; may 404 if already gone). */
   deleteEvent(conn: CalConnection, externalId: string): Promise<void>;
   /** Refresh the access token if near expiry; returns new material to persist or null. */
@@ -57,8 +61,9 @@ class DemoCalendar implements CalendarAdapter {
     }
     return out;
   }
-  async upsertEvent(_c: CalConnection, ev: PushEvent, existingId?: string | null): Promise<string | null> {
-    return existingId ?? `demo-evt-${ev.bookingId}`;
+  async upsertEvent(_c: CalConnection, ev: PushEvent, existingId?: string | null): Promise<UpsertResult> {
+    // Demo: simulate a provider-minted video link so the whole flow is exercisable with no accounts.
+    return { id: existingId ?? `demo-evt-${ev.bookingId}`, meetingUrl: ev.video ? `https://meet.demo.slotter/${ev.bookingId}` : null };
   }
   async deleteEvent(): Promise<void> { /* no-op */ }
   async ensureFreshToken(): Promise<RefreshedToken> { return null; }
@@ -110,8 +115,8 @@ class GoogleCalendar implements CalendarAdapter {
     return out;
   }
 
-  async upsertEvent(conn: CalConnection, ev: PushEvent, existingId?: string | null): Promise<string | null> {
-    const body = {
+  async upsertEvent(conn: CalConnection, ev: PushEvent, existingId?: string | null): Promise<UpsertResult> {
+    const body: Record<string, unknown> = {
       summary: ev.title,
       description: ev.description,
       location: ev.location,
@@ -119,16 +124,26 @@ class GoogleCalendar implements CalendarAdapter {
       end: { dateTime: iso(ev.end) },
       extendedProperties: { private: { [MARKER]: ev.bookingId } },
     };
+    // B1: on CREATE of a video service, ask Google to mint a Meet link. (Only on insert — a
+    // createRequest on an event that already has a conference errors; PATCH keeps the existing link.)
+    if (ev.video && !existingId) {
+      body.conferenceData = { createRequest: { requestId: ev.bookingId, conferenceSolutionKey: { type: "hangoutsMeet" } } };
+    }
+    const cdv = ev.video ? "?conferenceDataVersion=1" : "";
     const url = existingId
-      ? `${this.base}/calendars/${this.cal(conn)}/events/${encodeURIComponent(existingId)}`
-      : `${this.base}/calendars/${this.cal(conn)}/events`;
+      ? `${this.base}/calendars/${this.cal(conn)}/events/${encodeURIComponent(existingId)}${cdv}`
+      : `${this.base}/calendars/${this.cal(conn)}/events${cdv}`;
     const res = await fetch(url, {
       method: existingId ? "PATCH" : "POST",
       headers: { ...this.auth(conn), "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`google events.${existingId ? "patch" : "insert"} failed: ${res.status}`);
-    return (await res.json()).id ?? null;
+    const j = await res.json();
+    const video = j.hangoutLink
+      ?? (j.conferenceData?.entryPoints ?? []).find((e: { entryPointType?: string; uri?: string }) => e.entryPointType === "video")?.uri
+      ?? null;
+    return { id: j.id ?? null, meetingUrl: video };
   }
 
   async deleteEvent(conn: CalConnection, externalId: string): Promise<void> {
@@ -192,8 +207,8 @@ class MicrosoftCalendar implements CalendarAdapter {
     return out;
   }
 
-  async upsertEvent(conn: CalConnection, ev: PushEvent, existingId?: string | null): Promise<string | null> {
-    const body = {
+  async upsertEvent(conn: CalConnection, ev: PushEvent, existingId?: string | null): Promise<UpsertResult> {
+    const body: Record<string, unknown> = {
       subject: ev.title,
       body: { contentType: "text", content: ev.description ?? "" },
       location: ev.location ? { displayName: ev.location } : undefined,
@@ -201,6 +216,8 @@ class MicrosoftCalendar implements CalendarAdapter {
       end: { dateTime: iso(ev.end), timeZone: "UTC" },
       singleValueExtendedProperties: [{ id: this.extProp, value: ev.bookingId }],
     };
+    // B1: on CREATE of a video service, ask Graph to attach a Teams online meeting.
+    if (ev.video && !existingId) { body.isOnlineMeeting = true; body.onlineMeetingProvider = "teamsForBusiness"; }
     const url = existingId ? `${this.base}/me/events/${encodeURIComponent(existingId)}` : `${this.base}/me/events`;
     const res = await fetch(url, {
       method: existingId ? "PATCH" : "POST",
@@ -208,7 +225,8 @@ class MicrosoftCalendar implements CalendarAdapter {
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`graph event ${existingId ? "patch" : "create"} failed: ${res.status}`);
-    return (await res.json()).id ?? null;
+    const j = await res.json();
+    return { id: j.id ?? null, meetingUrl: j.onlineMeeting?.joinUrl ?? null };
   }
 
   async deleteEvent(conn: CalConnection, externalId: string): Promise<void> {

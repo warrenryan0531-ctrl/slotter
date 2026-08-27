@@ -1,7 +1,7 @@
 import { getSession } from "@/lib/auth";
 import * as repo from "@/lib/repo";
 import { tenantSettings } from "@/lib/types";
-import { SettingsForm, CopyButton, DashAction, RemindersForm, FeatureToggle } from "@/components/dash";
+import { SettingsForm, CopyButton, DashAction, RemindersForm, FeatureToggle, ReviewRequestForm } from "@/components/dash";
 import { ThemePicker, BookingColorPicker } from "@/components/theme";
 import { getPrefs } from "@/lib/prefs";
 
@@ -51,6 +51,12 @@ export default async function SettingsPage() {
         <h2 className="font-semibold text-lg mb-1">Automatic reminders</h2>
         <p className="text-sm text-gray-500 mb-3">We&apos;ll email each customer a reminder before their time — the easiest way to cut no-shows. Pick when.</p>
         <RemindersForm initial={s.reminderHours} />
+      </section>
+
+      <section>
+        <h2 className="font-semibold text-lg mb-1">Ask for reviews automatically</h2>
+        <p className="text-sm text-gray-500 mb-3">More 5-star reviews, on autopilot. After each visit we&apos;ll invite the customer to review you — the single best way to win new local customers.</p>
+        <ReviewRequestForm initial={{ enabled: s.reviewRequest.enabled, delayHours: s.reviewRequest.delayHours, url: s.reviewRequest.url, channel: s.reviewRequest.channel }} />
       </section>
 
       <section>
