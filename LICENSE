@@ -1,21 +1,40 @@
-MIT License
+Slotter
+Copyright (c) 2026 Ryan Warren / 904 Digital Media. All rights reserved.
 
-Copyright (c) 2026 Ryan Warren
+PROPRIETARY AND CONFIDENTIAL — ALL RIGHTS RESERVED
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+NOTICE OF LICENSE WITHDRAWAL
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This project was previously distributed under the MIT License. That license
+is WITHDRAWN as of this commit. Slotter is a commercial product and is no
+longer offered as open-source software. No new license is granted to any
+person or entity from this commit forward.
+
+NO LICENSE GRANTED
+
+No license or right, express or implied, is granted to use, copy, reproduce,
+modify, adapt, merge, publish, distribute, sublicense, sell, lease, rent, host
+as a service, reverse engineer, or create derivative works from this software
+or any part of it, by any means or in any form, without the prior written
+permission of the copyright holder.
+
+Unauthorized copying, distribution, disclosure, or use of this software, via
+any medium, is strictly prohibited.
+
+ACCESS DOES NOT CONFER RIGHTS
+
+Access to this repository or to any copy of this software, whether granted for
+purposes of employment, contracting, evaluation, demonstration, investment
+diligence, or otherwise, does not transfer or grant any ownership interest or
+license whatsoever.
+
+NO WARRANTY
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING
+FROM OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Licensing and purchase inquiries: ryan@weare904digitalmedia.com
